@@ -88,6 +88,7 @@
       <span id="live-price" class="live-price">—</span>
       <span id="live-change" class="live-change"></span>
     </div>
+    <div id="live-pnl" class="live-distances"></div>
     <div id="live-distances" class="live-distances"></div>
     <div id="live-meta" class="live-meta" style="margin-top:10px;">Fetching from Binance…</div>
   </div>
@@ -304,6 +305,19 @@ function renderDistances(price) {
   el.innerHTML = parts.join("");
 }
 
+function renderUnrealizedPnl(price) {
+  const el = document.getElementById("live-pnl");
+  if (LIVE_STATE.status !== "IN_POSITION") { el.innerHTML = ""; return; }
+  const dir = LIVE_STATE.direction === "LONG" ? 1 : -1;
+  const movePct = (price - LIVE_STATE.entry_price) / LIVE_STATE.entry_price * dir * 100;
+  const levPct = movePct * CFG.LEVERAGE;
+  const cls = (x) => "val " + (x >= 0 ? "up" : "down");
+  const sign = (x) => (x >= 0 ? "+" : "") + x.toFixed(2) + "%";
+  el.innerHTML = `
+    <div><span class="lbl">Unrealized P&amp;L — unleveraged (spot)</span><b class="${cls(movePct)}">${sign(movePct)}</b></div>
+    <div><span class="lbl">Unrealized P&amp;L — ${CFG.LEVERAGE}x leveraged (of margin)</span><b class="${cls(levPct)}">${sign(levPct)}</b></div>`;
+}
+
 async function refreshPrice() {
   const dot = document.getElementById("live-dot");
   const priceEl = document.getElementById("live-price");
@@ -324,6 +338,7 @@ async function refreshPrice() {
     dot.className = "live-dot ok";
     metaEl.textContent = "Live from Binance · updated " + new Date().toLocaleTimeString();
     renderDistances(price);
+    renderUnrealizedPnl(price);
   } catch (e) {
     dot.className = "live-dot err";
     metaEl.textContent = "Couldn't fetch live price (" + e.message + "). Retrying…";
