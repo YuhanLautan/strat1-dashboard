@@ -119,6 +119,17 @@ def build_html(data):
         "trigger_price": live.get("trigger_price"),
     })
 
+    checkpoint_js_data = json.dumps(data["engine_checkpoint"])
+    engine_cfg_js_data = json.dumps({
+        "RSI_PERIOD": cfg["RSI_PERIOD"], "RSI_OVERSOLD": cfg["RSI_OVERSOLD"], "RSI_OVERBOUGHT": cfg["RSI_OVERBOUGHT"],
+        "USE_MA_FILTER": cfg["USE_MA_FILTER"], "MA_PERIOD": cfg["MA_PERIOD"], "ALLOW_SHORTS": cfg.get("ALLOW_SHORTS", False),
+        "STOP_LOSS_PCT": cfg["STOP_LOSS_PCT"], "TAKE_PROFIT_PCT": cfg["TAKE_PROFIT_PCT"], "LEVERAGE": cfg["LEVERAGE"],
+        "DAILY_LOSS_LIMIT_PCT": cfg["DAILY_LOSS_LIMIT_PCT"], "DAILY_LOSS_PAUSE_DAYS": cfg["DAILY_LOSS_PAUSE_DAYS"],
+        "CAUSAL_DETECTOR_LOOKBACK_DAYS": cfg["CAUSAL_DETECTOR_LOOKBACK_DAYS"],
+        "CAUSAL_DETECTOR_THRESHOLD_PCT": cfg["CAUSAL_DETECTOR_THRESHOLD_PCT"],
+        "CAUSAL_DETECTOR_PERSISTENCE_DAYS": cfg["CAUSAL_DETECTOR_PERSISTENCE_DAYS"],
+    })
+
     rows_trades = ""
     for t in reversed(trades):
         d = t["direction"]
@@ -227,10 +238,10 @@ def build_html(data):
   <h1>Strat 1 — Causal Consolidation-Gated RSI/MA Reversal (15m BTCUSDT)</h1>
   <div class="subtitle">5x leverage · 10% daily-loss limit · 3-day pause on breach — the adopted config</div>
 
-  <div class="banner">
-    ⚠ This is a <b>backtest snapshot</b>, not a live feed. Status below reflects the last candle in the
-    local dataset (<b>{live['as_of']}</b>). Re-run <code>export_status.py</code> after refreshing
-    <code>BTCUSDT_15m_history.csv</code> to bring this current before using it to place a real trade.
+  <div id="staleness-banner" class="banner">
+    ⚠ Showing a <b>backtest snapshot</b> from <b>{live['as_of']}</b> while the live engine computes (or as a
+    fallback if it fails to reach Binance). Re-run <code>export_status.py</code> against a refreshed
+    <code>BTCUSDT_15m_history.csv</code> any time to move this checkpoint forward.
   </div>
 
   <div class="card">
@@ -244,7 +255,8 @@ def build_html(data):
   </div>
 
   <div class="card">
-    <h2>Current status</h2>
+    <h2>Current status <span id="engine-live-tag" class="mini-badge" style="margin-left:8px;">computing…</span></h2>
+    <div id="status-card-inner">
     <span class="status-badge {status_class}">{status_labels[status]}</span>
     <div class="mini-badges">
       <span class="mini-badge">Consolidation gate: {gate_badge}</span>
@@ -253,6 +265,7 @@ def build_html(data):
       <span class="mini-badge">MA({live['ma_period']}): ${fmt_num(live['current_ma'])}</span>
     </div>
     {live_body}
+    </div>
   </div>
 
   <div class="card">
@@ -304,11 +317,22 @@ def build_html(data):
 </div>
 
 <script>
-const LIVE_STATE = {live_price_js_data};
+let LIVE_STATE = {live_price_js_data};
+const CHECKPOINT = {checkpoint_js_data};
+const CFG = {engine_cfg_js_data};
 let prevPrice = null;
 
 function fmtUsd(x) {{
   return "$" + x.toLocaleString(undefined, {{minimumFractionDigits: 2, maximumFractionDigits: 2}});
+}}
+function dateStr(isoOrMs) {{
+  const d = new Date(isoOrMs);
+  return d.toISOString().slice(0, 10);
+}}
+function addDaysStr(ds, n) {{
+  const d = new Date(ds + "T00:00:00Z");
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
 }}
 
 function renderDistances(price) {{
@@ -352,8 +376,245 @@ async function refreshPrice() {{
   }}
 }}
 
+// ---------------------------------------------------------------------
+// Live strategy engine: replays RSI/MA signals, the consolidation gate,
+// and the SL/TP/pause state machine forward from the checkpoint baked
+// into this page (computed by export_status.py from the local backtest)
+// using fresh candles pulled straight from Binance. Mirrors run_variant.py
+// / export_status.py's simulate loop as closely as practical client-side.
+// ---------------------------------------------------------------------
+
+async function fetchKlines(interval, startTime, endTime, limit) {{
+  const out = [];
+  let cursor = startTime;
+  while (cursor < endTime) {{
+    const url = `https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=${{interval}}&startTime=${{cursor}}&endTime=${{endTime}}&limit=${{limit}}`;
+    const res = await fetch(url, {{cache: "no-store"}});
+    if (!res.ok) throw new Error("klines HTTP " + res.status);
+    const batch = await res.json();
+    if (!batch.length) break;
+    for (const k of batch) {{
+      out.push({{
+        openTime: k[0], open: parseFloat(k[1]), high: parseFloat(k[2]),
+        low: parseFloat(k[3]), close: parseFloat(k[4]), closeTime: k[6],
+      }});
+    }}
+    if (batch.length < limit) break;
+    cursor = batch[batch.length - 1].closeTime + 1;
+  }}
+  return out;
+}}
+
+function computeRSIWilder(closes, period) {{
+  const n = closes.length;
+  const rsi = new Array(n).fill(null);
+  const alpha = 1 / period;
+  let avgGain = null, avgLoss = null;
+  for (let i = 1; i < n; i++) {{
+    const delta = closes[i] - closes[i - 1];
+    const gain = Math.max(delta, 0), loss = Math.max(-delta, 0);
+    if (avgGain === null) {{ avgGain = gain; avgLoss = loss; }}
+    else {{ avgGain = alpha * gain + (1 - alpha) * avgGain; avgLoss = alpha * loss + (1 - alpha) * avgLoss; }}
+    if (avgLoss === 0) rsi[i] = avgGain === 0 ? 50 : 100;
+    else {{ const rs = avgGain / avgLoss; rsi[i] = 100 - 100 / (1 + rs); }}
+  }}
+  return rsi;
+}}
+
+function computeMA(closes, period) {{
+  const n = closes.length;
+  const ma = new Array(n).fill(null);
+  let sum = 0;
+  for (let i = 0; i < n; i++) {{
+    sum += closes[i];
+    if (i >= period) sum -= closes[i - period];
+    if (i >= period - 1) ma[i] = sum / period;
+  }}
+  return ma;
+}}
+
+function computeDailyFlags(days, lookback, thresholdPct, persistence) {{
+  const n = days.length;
+  const rawHit = new Array(n).fill(false);
+  for (let i = 0; i < n; i++) {{
+    const start = Math.max(0, i - lookback + 1);
+    if (i - start + 1 < lookback) continue;
+    let hi = -Infinity, lo = Infinity;
+    for (let j = start; j <= i; j++) {{ hi = Math.max(hi, days[j].high); lo = Math.min(lo, days[j].low); }}
+    rawHit[i] = ((hi - lo) / lo * 100) <= thresholdPct;
+  }}
+  if (persistence <= 1) return rawHit;
+  const flag = new Array(n).fill(false);
+  let run = 0;
+  for (let i = 0; i < n; i++) {{ run = rawHit[i] ? run + 1 : 0; flag[i] = run >= persistence; }}
+  return flag;
+}}
+
+function statusLabel(s) {{
+  return {{IN_POSITION: "IN POSITION", PENDING_ENTRY: "PENDING ENTRY (order resting, not filled)", FLAT_NO_SIGNAL: "FLAT — no signal"}}[s];
+}}
+function statusClass(s, direction) {{
+  if (s === "IN_POSITION") return direction === "LONG" ? "long" : "short";
+  if (s === "PENDING_ENTRY") return "pending";
+  return "flat";
+}}
+
+function renderStatusCard(st) {{
+  const badgeClass = statusClass(st.status, st.direction);
+  let body = "";
+  if (st.status === "IN_POSITION") {{
+    const dirClass = st.direction === "LONG" ? "up" : "down";
+    body = `
+      <div class="status-grid">
+        <div><span class="lbl">Direction</span><span class="val ${{dirClass}}">${{st.direction}}</span></div>
+        <div><span class="lbl">Entry time</span><span class="val">${{st.entry_time}}</span></div>
+        <div><span class="lbl">Entry price</span><span class="val">${{fmtUsd(st.entry_price)}}</span></div>
+        <div><span class="lbl">Stop loss</span><span class="val down">${{fmtUsd(st.stop_loss_price)}}</span></div>
+        <div><span class="lbl">Take profit</span><span class="val up">${{fmtUsd(st.take_profit_price)}}</span></div>
+      </div>
+      <p class="manual-note">Manual trade reference: to mirror this position, go <b>${{st.direction}}</b> at/near
+      <b>${{fmtUsd(st.entry_price)}}</b>, stop-loss at <b>${{fmtUsd(st.stop_loss_price)}}</b>,
+      take-profit at <b>${{fmtUsd(st.take_profit_price)}}</b>.</p>`;
+  }} else if (st.status === "PENDING_ENTRY") {{
+    const dirClass = st.direction === "LONG" ? "up" : "down";
+    body = `
+      <div class="status-grid">
+        <div><span class="lbl">Direction</span><span class="val ${{dirClass}}">${{st.direction}}</span></div>
+        <div><span class="lbl">Signal candle</span><span class="val">${{st.signal_time}}</span></div>
+        <div><span class="lbl">Trigger price</span><span class="val">${{fmtUsd(st.trigger_price)}}</span></div>
+      </div>
+      <p class="manual-note">Manual trade reference: a resting limit-style entry is waiting to be touched at
+      <b>${{fmtUsd(st.trigger_price)}}</b> (${{st.direction}}). It only becomes a real position once price
+      actually trades back through that level.</p>`;
+  }} else {{
+    body = `<p class="manual-note">No open position and no resting entry signal right now. The strategy is
+    waiting for RSI + MA conditions to line up while the consolidation gate is open.</p>`;
+  }}
+  document.getElementById("status-card-inner").innerHTML = `
+    <span class="status-badge ${{badgeClass}}">${{statusLabel(st.status)}}</span>
+    <div class="mini-badges">
+      <span class="mini-badge">Consolidation gate: ${{st.gate_open ? "OPEN" : "CLOSED"}}</span>
+      <span class="mini-badge">Daily-loss pause: ${{st.blocked ? "PAUSED" : "ACTIVE"}}</span>
+      <span class="mini-badge">RSI(${{CFG.RSI_PERIOD}}): ${{st.rsi.toFixed(1)}}</span>
+      <span class="mini-badge">MA(${{CFG.MA_PERIOD}}): ${{fmtUsd(st.ma)}}</span>
+    </div>
+    ${{body}}`;
+}}
+
+async function runLiveEngine() {{
+  const tag = document.getElementById("engine-live-tag");
+  try {{
+    const checkpointMs = new Date(CHECKPOINT.as_of_time).getTime();
+    const now = Date.now();
+
+    const warmupCloses = CHECKPOINT.warmup_closes.map(w => w.c);
+    const newCandles = await fetchKlines("15m", checkpointMs + 1, now, 1000);
+    const closedNew = newCandles.filter(k => k.closeTime <= now);
+    if (!closedNew.length) {{ tag.textContent = "live (no new candles yet)"; tag.style.color = "var(--up)"; return; }}
+
+    const allCloses = warmupCloses.concat(closedNew.map(k => k.close));
+    const rsiArr = computeRSIWilder(allCloses, CFG.RSI_PERIOD);
+    const maArr = computeMA(allCloses, CFG.MA_PERIOD);
+    const offset = warmupCloses.length;
+
+    const dailyStart = now - 40 * 86400000;
+    const dailyRaw = await fetchKlines("1d", dailyStart, now, 45);
+    const days = dailyRaw.filter(k => k.closeTime <= now).map(k => ({{date: dateStr(k.openTime), high: k.high, low: k.low}}));
+    const dayFlags = computeDailyFlags(days, CFG.CAUSAL_DETECTOR_LOOKBACK_DAYS, CFG.CAUSAL_DETECTOR_THRESHOLD_PCT, CFG.CAUSAL_DETECTOR_PERSISTENCE_DAYS);
+    const gateMap = new Map();
+    for (let i = 0; i < days.length; i++) gateMap.set(addDaysStr(days[i].date, 1), dayFlags[i]);
+
+    let hasPosition = CHECKPOINT.has_position;
+    let direction = CHECKPOINT.direction === "LONG" ? 1 : (CHECKPOINT.direction === "SHORT" ? -1 : null);
+    let entryPrice = CHECKPOINT.entry_price;
+    let entryTime = CHECKPOINT.entry_time;
+    let pending = CHECKPOINT.pending;
+    let pendingDir = direction;
+    let pendingTrigger = CHECKPOINT.trigger_price;
+    let signalTime = CHECKPOINT.signal_time;
+    let pausedUntilDate = CHECKPOINT.paused_until_date;
+    let curDay = dateStr(CHECKPOINT.as_of_time);
+    let dailyPnlPct = 0;
+
+    const slPct = CFG.STOP_LOSS_PCT / 100, tpPct = CFG.TAKE_PROFIT_PCT / 100;
+    let lastRsi = rsiArr[offset - 1], lastMa = maArr[offset - 1], lastGateOpen = gateMap.get(curDay) || false;
+
+    for (let idx = 0; idx < closedNew.length; idx++) {{
+      const k = closedNew[idx];
+      const i = offset + idx;
+      const price = k.close, lo = k.low, hi = k.high, d = dateStr(k.openTime);
+      if (d !== curDay) {{ curDay = d; dailyPnlPct = 0; }}
+
+      if (hasPosition) {{
+        let hitSl, hitTp;
+        if (direction === 1) {{ hitSl = price <= entryPrice * (1 - slPct); hitTp = price >= entryPrice * (1 + tpPct); }}
+        else {{ hitSl = price >= entryPrice * (1 + slPct); hitTp = price <= entryPrice * (1 - tpPct); }}
+        if (hitSl || hitTp) {{
+          const movePct = hitTp ? tpPct : ((price - entryPrice) / entryPrice * direction);
+          dailyPnlPct += movePct * CFG.LEVERAGE * 100; // approximation: ignores fees' small effect on the exact pause threshold
+          hasPosition = false;
+          if (dailyPnlPct <= -CFG.DAILY_LOSS_LIMIT_PCT) pausedUntilDate = addDaysStr(d, CFG.DAILY_LOSS_PAUSE_DAYS - 1);
+        }}
+      }}
+
+      const blocked = pausedUntilDate !== null && d <= pausedUntilDate;
+      const gateOk = gateMap.get(d) || false;
+      const rsiVal = rsiArr[i], maVal = maArr[i];
+      let entrySignal = 0;
+      if (CFG.USE_MA_FILTER) {{
+        if (rsiVal <= CFG.RSI_OVERSOLD && price > maVal) entrySignal = 1;
+        else if (CFG.ALLOW_SHORTS && rsiVal >= CFG.RSI_OVERBOUGHT && price < maVal) entrySignal = -1;
+      }} else {{
+        if (rsiVal <= CFG.RSI_OVERSOLD) entrySignal = 1;
+        else if (CFG.ALLOW_SHORTS && rsiVal >= CFG.RSI_OVERBOUGHT) entrySignal = -1;
+      }}
+
+      if (pending) {{
+        const touched = pendingDir === 1 ? (lo <= pendingTrigger) : (hi >= pendingTrigger);
+        if (touched && !hasPosition) {{
+          hasPosition = true; direction = pendingDir; entryPrice = pendingTrigger; entryTime = new Date(k.openTime).toISOString();
+        }}
+        pending = false;
+      }} else if (!hasPosition && !blocked && gateOk && entrySignal !== 0) {{
+        pending = true; pendingDir = entrySignal; pendingTrigger = price; signalTime = new Date(k.openTime).toISOString();
+      }}
+
+      lastRsi = rsiVal; lastMa = maVal; lastGateOpen = gateOk;
+    }}
+
+    let status;
+    if (hasPosition) status = "IN_POSITION";
+    else if (pending) status = "PENDING_ENTRY";
+    else status = "FLAT_NO_SIGNAL";
+
+    const st = {{
+      status, gate_open: lastGateOpen, blocked: pausedUntilDate !== null && curDay <= pausedUntilDate,
+      rsi: lastRsi, ma: lastMa,
+      direction: direction === 1 ? "LONG" : (direction === -1 ? "SHORT" : null),
+      entry_time: entryTime, entry_price: entryPrice,
+      stop_loss_price: hasPosition ? (direction === 1 ? entryPrice * (1 - slPct) : entryPrice * (1 + slPct)) : null,
+      take_profit_price: hasPosition ? (direction === 1 ? entryPrice * (1 + tpPct) : entryPrice * (1 - tpPct)) : null,
+      trigger_price: pendingTrigger, signal_time: signalTime,
+    }};
+
+    renderStatusCard(st);
+    LIVE_STATE = {{
+      status: st.status, direction: st.direction, entry_price: st.entry_price,
+      stop_loss_price: st.stop_loss_price, take_profit_price: st.take_profit_price, trigger_price: st.trigger_price,
+    }};
+    document.getElementById("staleness-banner").style.display = "none";
+    tag.textContent = "live · computed " + new Date().toLocaleTimeString();
+    tag.style.color = "var(--up)";
+  }} catch (e) {{
+    tag.textContent = "live engine unavailable (" + e.message + ") — showing backtest snapshot";
+    tag.style.color = "var(--down)";
+  }}
+}}
+
 refreshPrice();
 setInterval(refreshPrice, 10000);
+runLiveEngine();
+setInterval(runLiveEngine, 60000);
 </script>
 </body>
 </html>

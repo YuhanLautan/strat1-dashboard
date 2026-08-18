@@ -149,12 +149,15 @@ def simulate_with_live_state(prepared, cfg, leverage, daily_limit_pct, pause_day
     return_pct = (final_equity - starting_balance) / starting_balance * 100
     win_rate = (num_wins / num_trades * 100) if num_trades else 0.0
 
+    dataset_start_date = open_time.iloc[0].normalize()
+    paused_until_date = (dataset_start_date + pd.Timedelta(days=int(paused_until_day))) if paused_until_day >= 0 else None
+
     live_state = {
         "as_of": str(open_time.iloc[n - 1]),
         "last_close": float(close[n - 1]),
         "gate_open": bool(causal_mask[n - 1]),
         "blocked_by_daily_loss_pause": bool(cur_day <= paused_until_day),
-        "paused_until_day_index": int(paused_until_day) if paused_until_day >= 0 else None,
+        "paused_until_date": str(paused_until_date.date()) if paused_until_date is not None else None,
     }
     if has_position:
         sl_price = entry_price * (1 - sl_pct) if direction == 1 else entry_price * (1 + sl_pct)
@@ -207,6 +210,17 @@ def main():
     r["live_state"]["rsi_period"] = cfg["RSI_PERIOD"]
     r["live_state"]["ma_period"] = cfg["MA_PERIOD"]
 
+    # Warmup buffer so a browser can continue the RSI/MA recursion forward
+    # from this checkpoint using only new candles fetched from Binance --
+    # 200 15m closes is far more than RSI(5)'s EWM needs to converge
+    # (alpha=0.2, so (1-alpha)^200 is effectively zero) and MA(50) only
+    # ever needs its own trailing 50 anyway.
+    WARMUP_N = 200
+    warmup_closes = [
+        {"t": str(t), "c": float(c)}
+        for t, c in zip(df["open_time"].iloc[-WARMUP_N:], df["close"].iloc[-WARMUP_N:])
+    ]
+
     out = {
         "config": cfg,
         "summary": {
@@ -219,6 +233,18 @@ def main():
         "live_state": r["live_state"],
         "last_10_trades": r["trades"][-10:],
         "generated_at_data_timestamp": r["live_state"]["as_of"],
+        "engine_checkpoint": {
+            "as_of_time": r["live_state"]["as_of"],
+            "has_position": r["live_state"]["status"] == "IN_POSITION",
+            "direction": r["live_state"].get("direction"),
+            "entry_time": r["live_state"].get("entry_time"),
+            "entry_price": r["live_state"].get("entry_price"),
+            "pending": r["live_state"]["status"] == "PENDING_ENTRY",
+            "trigger_price": r["live_state"].get("trigger_price"),
+            "signal_time": r["live_state"].get("signal_time"),
+            "paused_until_date": r["live_state"]["paused_until_date"],
+            "warmup_closes": warmup_closes,
+        },
     }
     with open(OUT_PATH, "w") as f:
         json.dump(out, f, indent=2, default=str)
