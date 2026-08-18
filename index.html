@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Strat 1 — Live Status</title>
+<style>
+  :root {
+    --bg: #0b0f14; --panel: #131a22; --panel2: #182029; --border: #253140;
+    --text: #e6edf3; --muted: #8b98a5; --up: #3fb950; --down: #f85149;
+    --accent: #58a6ff; --pending: #d29922;
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--text); margin: 0; padding: 32px 20px 60px;
+    font-family: -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; }
+  h1 { font-size: 1.5rem; margin-bottom: 4px; }
+  .subtitle { color: var(--muted); font-size: 0.9rem; margin-bottom: 24px; }
+  .banner {
+    background: #3b2c00; border: 1px solid #6b4e00; color: #ffd97a;
+    padding: 10px 14px; border-radius: 8px; font-size: 0.85rem; margin-bottom: 24px;
+  }
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    padding: 20px 22px; margin-bottom: 22px;
+  }
+  .card h2 { font-size: 1.05rem; margin: 0 0 14px; }
+  .status-badge {
+    display: inline-block; padding: 4px 12px; border-radius: 999px; font-weight: 600;
+    font-size: 0.8rem; letter-spacing: 0.03em; margin-bottom: 14px;
+  }
+  .status-badge.long { background: rgba(63,185,80,0.15); color: var(--up); border: 1px solid rgba(63,185,80,0.4); }
+  .status-badge.short { background: rgba(248,81,73,0.15); color: var(--down); border: 1px solid rgba(248,81,73,0.4); }
+  .status-badge.pending { background: rgba(210,153,34,0.15); color: var(--pending); border: 1px solid rgba(210,153,34,0.4); }
+  .status-badge.flat { background: rgba(139,148,165,0.15); color: var(--muted); border: 1px solid rgba(139,148,165,0.4); }
+  .mini-badges { display: flex; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; }
+  .mini-badge { font-size: 0.75rem; color: var(--muted); background: var(--panel2); border: 1px solid var(--border); padding: 3px 10px; border-radius: 6px; }
+  .status-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px 22px; margin-bottom: 14px;
+  }
+  .status-grid > div { display: flex; flex-direction: column; gap: 2px; }
+  .lbl { font-size: 0.72rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  .val { font-size: 1.05rem; font-weight: 600; }
+  .val.up { color: var(--up); }
+  .val.down { color: var(--down); }
+  .manual-note {
+    background: var(--panel2); border: 1px solid var(--border); border-left: 3px solid var(--accent);
+    padding: 10px 14px; border-radius: 6px; font-size: 0.85rem; color: var(--text); line-height: 1.5;
+  }
+  table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+  th { color: var(--muted); font-weight: 500; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.03em; }
+  td.up { color: var(--up); }
+  td.down { color: var(--down); }
+  .table-scroll { overflow-x: auto; }
+  .summary-row { display: flex; gap: 28px; flex-wrap: wrap; margin-bottom: 6px; }
+  .summary-row div { display: flex; flex-direction: column; gap: 2px; }
+  .params-table td:first-child { color: var(--muted); }
+  .params-table td:last-child { font-weight: 600; text-align: right; }
+  footer { color: var(--muted); font-size: 0.78rem; line-height: 1.6; margin-top: 30px; }
+  code { background: var(--panel2); padding: 1px 5px; border-radius: 4px; font-size: 0.85em; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Strat 1 — Causal Consolidation-Gated RSI/MA Reversal (15m BTCUSDT)</h1>
+  <div class="subtitle">5x leverage · 10% daily-loss limit · 3-day pause on breach — the adopted config</div>
+
+  <div class="banner">
+    ⚠ This is a <b>backtest snapshot</b>, not a live feed. Status below reflects the last candle in the
+    local dataset (<b>2026-08-13 06:30:00+00:00</b>). Re-run <code>export_status.py</code> after refreshing
+    <code>BTCUSDT_15m_history.csv</code> to bring this current before using it to place a real trade.
+  </div>
+
+  <div class="card">
+    <h2>Current status</h2>
+    <span class="status-badge short">IN POSITION</span>
+    <div class="mini-badges">
+      <span class="mini-badge">Consolidation gate: OPEN</span>
+      <span class="mini-badge">Daily-loss pause: ACTIVE</span>
+      <span class="mini-badge">RSI(5): 46.6</span>
+      <span class="mini-badge">MA(50): $63,557.45</span>
+    </div>
+    
+        <div class="status-grid">
+          <div><span class="lbl">Direction</span><span class="val down">SHORT</span></div>
+          <div><span class="lbl">Entry time</span><span class="val">2026-08-10 19:30:00+00:00</span></div>
+          <div><span class="lbl">Entry price</span><span class="val">$64,025.87</span></div>
+          <div><span class="lbl">Stop loss</span><span class="val down">$64,986.26</span></div>
+          <div><span class="lbl">Take profit</span><span class="val up">$62,745.35</span></div>
+          <div><span class="lbl">Last known price</span><span class="val">$63,790.01</span></div>
+          <div><span class="lbl">Unrealized P&L (of margin, 5x)</span><span class="val up">+1.84%</span></div>
+        </div>
+        <p class="manual-note">Manual trade reference: to mirror this position, go <b>SHORT</b> at/near
+        <b>$64,025.87</b>, stop-loss at <b>$64,986.26</b>,
+        take-profit at <b>$62,745.35</b>. Position was already open as of the
+        data timestamp below — if price has since moved past either level, that trade would already be closed;
+        re-run the exporter against fresh data to check.</p>
+        
+  </div>
+
+  <div class="card">
+    <h2>Last 10 closed trades</h2>
+    <div class="table-scroll">
+    <table>
+      <thead><tr>
+        <th>Entry time</th><th>Exit time</th><th>Dir</th><th>Exit reason</th>
+        <th>Entry px</th><th>Exit px</th><th>Margin</th><th>Balance after</th>
+      </tr></thead>
+      <tbody>
+        <tr>
+          <td>2026-08-07 14:00:00+00:00</td>
+          <td>2026-08-10 16:30:00+00:00</td>
+          <td class="up">LONG</td>
+          <td class="down">STOP LOSS</td>
+          <td>$65,009.24</td>
+          <td>$63,966.00</td>
+          <td>$658,732</td>
+          <td>$604,175</td>
+        </tr>
+        <tr>
+          <td>2026-08-03 18:30:00+00:00</td>
+          <td>2026-08-07 12:00:00+00:00</td>
+          <td class="up">LONG</td>
+          <td class="up">TAKE PROFIT</td>
+          <td>$63,849.36</td>
+          <td>$65,126.35</td>
+          <td>$599,938</td>
+          <td>$659,391</td>
+        </tr>
+        <tr>
+          <td>2026-07-31 16:15:00+00:00</td>
+          <td>2026-08-03 14:45:00+00:00</td>
+          <td class="down">SHORT</td>
+          <td class="down">STOP LOSS</td>
+          <td>$62,864.07</td>
+          <td>$63,967.19</td>
+          <td>$660,171</td>
+          <td>$600,538</td>
+        </tr>
+        <tr>
+          <td>2026-07-29 08:15:00+00:00</td>
+          <td>2026-07-31 13:45:00+00:00</td>
+          <td class="up">LONG</td>
+          <td class="down">STOP LOSS</td>
+          <td>$64,376.00</td>
+          <td>$63,270.73</td>
+          <td>$724,940</td>
+          <td>$660,831</td>
+        </tr>
+        <tr>
+          <td>2026-07-28 03:15:00+00:00</td>
+          <td>2026-07-29 06:15:00+00:00</td>
+          <td class="down">SHORT</td>
+          <td class="down">STOP LOSS</td>
+          <td>$63,277.08</td>
+          <td>$64,403.00</td>
+          <td>$798,804</td>
+          <td>$725,666</td>
+        </tr>
+        <tr>
+          <td>2026-07-27 00:15:00+00:00</td>
+          <td>2026-07-27 22:30:00+00:00</td>
+          <td class="up">LONG</td>
+          <td class="down">STOP LOSS</td>
+          <td>$65,227.32</td>
+          <td>$64,213.99</td>
+          <td>$869,377</td>
+          <td>$799,603</td>
+        </tr>
+        <tr>
+          <td>2026-07-24 15:15:00+00:00</td>
+          <td>2026-07-26 22:00:00+00:00</td>
+          <td class="down">SHORT</td>
+          <td class="down">STOP LOSS</td>
+          <td>$64,142.01</td>
+          <td>$65,206.96</td>
+          <td>$951,715</td>
+          <td>$870,247</td>
+        </tr>
+        <tr>
+          <td>2026-07-22 13:45:00+00:00</td>
+          <td>2026-07-24 13:00:00+00:00</td>
+          <td class="down">SHORT</td>
+          <td class="up">TAKE PROFIT</td>
+          <td>$65,888.01</td>
+          <td>$64,570.25</td>
+          <td>$866,771</td>
+          <td>$952,667</td>
+        </tr>
+        <tr>
+          <td>2026-07-21 15:15:00+00:00</td>
+          <td>2026-07-22 12:45:00+00:00</td>
+          <td class="up">LONG</td>
+          <td class="down">STOP LOSS</td>
+          <td>$66,682.59</td>
+          <td>$65,636.01</td>
+          <td>$944,169</td>
+          <td>$867,639</td>
+        </tr>
+        <tr>
+          <td>2026-07-20 17:45:00+00:00</td>
+          <td>2026-07-21 13:45:00+00:00</td>
+          <td class="up">LONG</td>
+          <td class="up">TAKE PROFIT</td>
+          <td>$65,354.00</td>
+          <td>$66,661.08</td>
+          <td>$859,899</td>
+          <td>$945,114</td>
+        </tr>
+      </tbody>
+    </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Backtest track record (full history, this config)</h2>
+    <div class="summary-row">
+      <div><span class="lbl">Return</span><span class="val up">+6,046.99%</span></div>
+      <div><span class="lbl">Max drawdown</span><span class="val down">-60.98%</span></div>
+      <div><span class="lbl">Trades (closed)</span><span class="val">458</span></div>
+      <div><span class="lbl">Win rate</span><span class="val">55.0%</span></div>
+    </div>
+    <p class="manual-note">Dollar figures compound off a hypothetical $10k start at 100% position size / 5x
+    leverage over ~9 years — not a realistic deployable size. The % return/drawdown/win-rate are the
+    meaningful numbers here.</p>
+  </div>
+
+  <div class="card">
+    <h2>All parameters</h2>
+    <table class="params-table">
+      <tbody><tr><td>RSI period</td><td>5</td></tr><tr><td>RSI long threshold (RSI ≤ this + price > MA → long)</td><td>55</td></tr><tr><td>RSI short threshold (RSI ≥ this + price < MA → short)</td><td>45</td></tr><tr><td>MA filter enabled</td><td>Yes</td></tr><tr><td>MA period</td><td>50candles</td></tr><tr><td>Shorts allowed</td><td>Yes</td></tr><tr><td>Close early on RSI flip</td><td>No</td></tr><tr><td>Stop loss</td><td>1.5%</td></tr><tr><td>Take profit</td><td>2%</td></tr><tr><td>Leverage</td><td>5x</td></tr><tr><td>Position size (of balance)</td><td>100%</td></tr><tr><td>Daily loss limit (margin-relative)</td><td>10%</td></tr><tr><td>Pause after daily-loss breach</td><td>3days</td></tr><tr><td>Multiple concurrent positions allowed</td><td>No</td></tr><tr><td>Taker fee (stop-loss exits)</td><td>0.05%</td></tr><tr><td>Consolidation gate: lookback</td><td>14days</td></tr><tr><td>Consolidation gate: range threshold</td><td>12%</td></tr><tr><td>Consolidation gate: persistence</td><td>2days</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <footer>
+    Strategy logic: RSI(5) + MA(50) filter decide direction while a causal
+    consolidation gate is open (trailing 14-day range must stay within
+    12% of its low for ≥2 consecutive
+    days, one-day-shifted so nothing leaks). Entries are pending-limit style — a signal only becomes a position
+    once the next candle's high/low actually touches the signal price. Exit is a fixed SL/TP bracket
+    (1.5% / 2.0%), whichever hits first. A daily-loss breach of
+    10.0% (margin-relative) pauses new entries for 3 days.
+    See <code>Strat 1/README.md</code> for full derivation, validation, and caveats.
+    Generated from data as of 2026-08-13 06:30:00+00:00.
+  </footer>
+</div>
+</body>
+</html>
