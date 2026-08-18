@@ -120,6 +120,7 @@ def build_html(data):
     })
 
     checkpoint_js_data = json.dumps(data["engine_checkpoint"])
+    static_trades_js_data = json.dumps(trades)
     engine_cfg_js_data = json.dumps({
         "RSI_PERIOD": cfg["RSI_PERIOD"], "RSI_OVERSOLD": cfg["RSI_OVERSOLD"], "RSI_OVERBOUGHT": cfg["RSI_OVERBOUGHT"],
         "USE_MA_FILTER": cfg["USE_MA_FILTER"], "MA_PERIOD": cfg["MA_PERIOD"], "ALLOW_SHORTS": cfg.get("ALLOW_SHORTS", False),
@@ -269,14 +270,14 @@ def build_html(data):
   </div>
 
   <div class="card">
-    <h2>Last 10 closed trades</h2>
+    <h2>Last 10 closed trades <span id="trades-live-tag" class="mini-badge" style="margin-left:8px;">computing…</span></h2>
     <div class="table-scroll">
     <table>
       <thead><tr>
         <th>Entry time</th><th>Exit time</th><th>Dir</th><th>Exit reason</th>
         <th>Entry px</th><th>Exit px</th><th>Margin</th><th>Balance after</th>
       </tr></thead>
-      <tbody>{rows_trades}
+      <tbody id="trades-tbody">{rows_trades}
       </tbody>
     </table>
     </div>
@@ -319,6 +320,7 @@ def build_html(data):
 <script>
 let LIVE_STATE = {live_price_js_data};
 const CHECKPOINT = {checkpoint_js_data};
+const STATIC_TRADES = {static_trades_js_data};
 const CFG = {engine_cfg_js_data};
 let prevPrice = null;
 
@@ -501,6 +503,31 @@ function renderStatusCard(st) {{
     ${{body}}`;
 }}
 
+function renderTradesTable(newTrades) {{
+  // newTrades (live-computed, no $ balance tracked) + STATIC_TRADES (from the
+  // backtest checkpoint, which do have $ balance) -- newest first, capped at 10.
+  const merged = newTrades.slice().reverse().map(t => ({{...t, live: true}}))
+    .concat(STATIC_TRADES.slice().reverse().map(t => ({{...t, live: false}})))
+    .slice(0, 10);
+  const rows = merged.map(t => {{
+    const dirClass = t.direction === "LONG" ? "up" : "down";
+    const reasonClass = t.reason === "TAKE_PROFIT" ? "up" : (t.reason === "STOP_LOSS" ? "down" : "");
+    const margin = t.live ? "—" : fmtUsd(t.margin_usd);
+    const bal = t.live ? "—" : fmtUsd(t.balance_after_usd);
+    return `<tr>
+      <td>${{t.entry_time}}</td>
+      <td>${{t.exit_time}}</td>
+      <td class="${{dirClass}}">${{t.direction}}</td>
+      <td class="${{reasonClass}}">${{t.reason.replace(/_/g, " ")}}</td>
+      <td>${{fmtUsd(t.entry_price)}}</td>
+      <td>${{fmtUsd(t.exit_price)}}</td>
+      <td>${{margin}}</td>
+      <td>${{bal}}</td>
+    </tr>`;
+  }}).join("");
+  document.getElementById("trades-tbody").innerHTML = rows;
+}}
+
 async function runLiveEngine() {{
   const tag = document.getElementById("engine-live-tag");
   try {{
@@ -535,6 +562,7 @@ async function runLiveEngine() {{
     let pausedUntilDate = CHECKPOINT.paused_until_date;
     let curDay = dateStr(CHECKPOINT.as_of_time);
     let dailyPnlPct = 0;
+    const newTrades = [];
 
     const slPct = CFG.STOP_LOSS_PCT / 100, tpPct = CFG.TAKE_PROFIT_PCT / 100;
     let lastRsi = rsiArr[offset - 1], lastMa = maArr[offset - 1], lastGateOpen = gateMap.get(curDay) || false;
@@ -552,6 +580,12 @@ async function runLiveEngine() {{
         if (hitSl || hitTp) {{
           const movePct = hitTp ? tpPct : ((price - entryPrice) / entryPrice * direction);
           dailyPnlPct += movePct * CFG.LEVERAGE * 100; // approximation: ignores fees' small effect on the exact pause threshold
+          const exitPrice = hitTp ? entryPrice * (1 + tpPct * direction) : price;
+          newTrades.push({{
+            entry_time: entryTime, exit_time: new Date(k.openTime).toISOString(),
+            direction: direction === 1 ? "LONG" : "SHORT", reason: hitTp ? "TAKE_PROFIT" : "STOP_LOSS",
+            entry_price: entryPrice, exit_price: exitPrice,
+          }});
           hasPosition = false;
           if (dailyPnlPct <= -CFG.DAILY_LOSS_LIMIT_PCT) pausedUntilDate = addDaysStr(d, CFG.DAILY_LOSS_PAUSE_DAYS - 1);
         }}
@@ -598,16 +632,24 @@ async function runLiveEngine() {{
     }};
 
     renderStatusCard(st);
+    renderTradesTable(newTrades);
     LIVE_STATE = {{
       status: st.status, direction: st.direction, entry_price: st.entry_price,
       stop_loss_price: st.stop_loss_price, take_profit_price: st.take_profit_price, trigger_price: st.trigger_price,
     }};
     document.getElementById("staleness-banner").style.display = "none";
-    tag.textContent = "live · computed " + new Date().toLocaleTimeString();
+    const nowStr = new Date().toLocaleTimeString();
+    tag.textContent = "live · computed " + nowStr;
     tag.style.color = "var(--up)";
+    const tradesTag = document.getElementById("trades-live-tag");
+    tradesTag.textContent = newTrades.length
+      ? `live · ${{newTrades.length}} new trade${{newTrades.length > 1 ? "s" : ""}} since snapshot`
+      : "live · none closed since snapshot";
+    tradesTag.style.color = "var(--up)";
   }} catch (e) {{
     tag.textContent = "live engine unavailable (" + e.message + ") — showing backtest snapshot";
     tag.style.color = "var(--down)";
+    document.getElementById("trades-live-tag").textContent = "showing backtest snapshot";
   }}
 }}
 
