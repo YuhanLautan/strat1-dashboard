@@ -110,6 +110,15 @@ def build_html(data):
     gate_badge = "OPEN" if live["gate_open"] else "CLOSED"
     pause_badge = "PAUSED" if live["blocked_by_daily_loss_pause"] else "ACTIVE"
 
+    live_price_js_data = json.dumps({
+        "status": status,
+        "direction": live.get("direction"),
+        "entry_price": live.get("entry_price"),
+        "stop_loss_price": live.get("stop_loss_price"),
+        "take_profit_price": live.get("take_profit_price"),
+        "trigger_price": live.get("trigger_price"),
+    })
+
     rows_trades = ""
     for t in reversed(trades):
         d = t["direction"]
@@ -202,6 +211,15 @@ def build_html(data):
   .params-table td:last-child {{ font-weight: 600; text-align: right; }}
   footer {{ color: var(--muted); font-size: 0.78rem; line-height: 1.6; margin-top: 30px; }}
   code {{ background: var(--panel2); padding: 1px 5px; border-radius: 4px; font-size: 0.85em; }}
+  .live-price-card {{ display: flex; align-items: baseline; gap: 16px; flex-wrap: wrap; }}
+  .live-price {{ font-size: 2.2rem; font-weight: 700; font-variant-numeric: tabular-nums; }}
+  .live-change {{ font-size: 1rem; font-weight: 600; }}
+  .live-dot {{ display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--muted); margin-right: 6px; }}
+  .live-dot.ok {{ background: var(--up); box-shadow: 0 0 6px var(--up); }}
+  .live-dot.err {{ background: var(--down); }}
+  .live-meta {{ color: var(--muted); font-size: 0.78rem; }}
+  .live-distances {{ display: flex; gap: 22px; flex-wrap: wrap; margin-top: 12px; font-size: 0.85rem; }}
+  .live-distances span.lbl {{ display: block; }}
 </style>
 </head>
 <body>
@@ -213,6 +231,16 @@ def build_html(data):
     ⚠ This is a <b>backtest snapshot</b>, not a live feed. Status below reflects the last candle in the
     local dataset (<b>{live['as_of']}</b>). Re-run <code>export_status.py</code> after refreshing
     <code>BTCUSDT_15m_history.csv</code> to bring this current before using it to place a real trade.
+  </div>
+
+  <div class="card">
+    <h2><span id="live-dot" class="live-dot"></span>Live BTC/USDT price</h2>
+    <div class="live-price-card">
+      <span id="live-price" class="live-price">—</span>
+      <span id="live-change" class="live-change"></span>
+    </div>
+    <div id="live-distances" class="live-distances"></div>
+    <div id="live-meta" class="live-meta" style="margin-top:10px;">Fetching from Binance…</div>
   </div>
 
   <div class="card">
@@ -274,6 +302,59 @@ def build_html(data):
     Generated from data as of {data['generated_at_data_timestamp']}.
   </footer>
 </div>
+
+<script>
+const LIVE_STATE = {live_price_js_data};
+let prevPrice = null;
+
+function fmtUsd(x) {{
+  return "$" + x.toLocaleString(undefined, {{minimumFractionDigits: 2, maximumFractionDigits: 2}});
+}}
+
+function renderDistances(price) {{
+  const el = document.getElementById("live-distances");
+  const parts = [];
+  if (LIVE_STATE.status === "IN_POSITION") {{
+    const toSl = (price - LIVE_STATE.stop_loss_price) / price * 100;
+    const toTp = (price - LIVE_STATE.take_profit_price) / price * 100;
+    parts.push(`<div><span class="lbl">To stop-loss (${{fmtUsd(LIVE_STATE.stop_loss_price)}})</span><b>${{toSl.toFixed(2)}}%</b></div>`);
+    parts.push(`<div><span class="lbl">To take-profit (${{fmtUsd(LIVE_STATE.take_profit_price)}})</span><b>${{toTp.toFixed(2)}}%</b></div>`);
+  }} else if (LIVE_STATE.status === "PENDING_ENTRY") {{
+    const toTrigger = (price - LIVE_STATE.trigger_price) / price * 100;
+    parts.push(`<div><span class="lbl">To entry trigger (${{fmtUsd(LIVE_STATE.trigger_price)}})</span><b>${{toTrigger.toFixed(2)}}%</b></div>`);
+  }}
+  el.innerHTML = parts.join("");
+}}
+
+async function refreshPrice() {{
+  const dot = document.getElementById("live-dot");
+  const priceEl = document.getElementById("live-price");
+  const changeEl = document.getElementById("live-change");
+  const metaEl = document.getElementById("live-meta");
+  try {{
+    const res = await fetch("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT", {{cache: "no-store"}});
+    if (!res.ok) throw new Error("HTTP " + res.status);
+    const data = await res.json();
+    const price = parseFloat(data.price);
+    priceEl.textContent = fmtUsd(price);
+    if (prevPrice !== null) {{
+      const diff = price - prevPrice;
+      changeEl.textContent = (diff >= 0 ? "▲ " : "▼ ") + Math.abs(diff).toFixed(2) + " since last check";
+      changeEl.style.color = diff >= 0 ? "var(--up)" : "var(--down)";
+    }}
+    prevPrice = price;
+    dot.className = "live-dot ok";
+    metaEl.textContent = "Live from Binance · updated " + new Date().toLocaleTimeString();
+    renderDistances(price);
+  }} catch (e) {{
+    dot.className = "live-dot err";
+    metaEl.textContent = "Couldn't fetch live price (" + e.message + "). Retrying…";
+  }}
+}}
+
+refreshPrice();
+setInterval(refreshPrice, 10000);
+</script>
 </body>
 </html>
 """
