@@ -366,15 +366,33 @@ function renderUnrealizedPnl(price) {{
     <div><span class="lbl">Unrealized P&amp;L — ${{CFG.LEVERAGE}}x leveraged (of margin)</span><b class="${{cls(levPct)}}">${{sign(levPct)}}</b></div>`;
 }}
 
+// Binance serves market data from a couple of different hosts. api.binance.com
+// geo-blocks US-origin traffic (HTTP 451) and is a common ad-blocker target;
+// data-api.binance.vision is Binance's dedicated public-market-data mirror,
+// meant for exactly this kind of anonymous read-only access, and isn't
+// geo-restricted -- tried first, with the other as a fallback in case either
+// one has a transient outage.
+const BINANCE_HOSTS = ["https://data-api.binance.vision", "https://api.binance.com"];
+
+async function fetchJson(path) {{
+  let lastErr;
+  for (const host of BINANCE_HOSTS) {{
+    try {{
+      const res = await fetch(host + path, {{cache: "no-store"}});
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      return await res.json();
+    }} catch (e) {{ lastErr = e; }}
+  }}
+  throw lastErr;
+}}
+
 async function refreshPrice() {{
   const dot = document.getElementById("live-dot");
   const priceEl = document.getElementById("live-price");
   const changeEl = document.getElementById("live-change");
   const metaEl = document.getElementById("live-meta");
   try {{
-    const res = await fetch("https://api.binance.com/api/v3/ticker/price?symbol=BTCUSDT", {{cache: "no-store"}});
-    if (!res.ok) throw new Error("HTTP " + res.status);
-    const data = await res.json();
+    const data = await fetchJson("/api/v3/ticker/price?symbol=BTCUSDT");
     const price = parseFloat(data.price);
     priceEl.textContent = fmtUsd(price);
     if (prevPrice !== null) {{
@@ -405,10 +423,8 @@ async function fetchKlines(interval, startTime, endTime, limit) {{
   const out = [];
   let cursor = startTime;
   while (cursor < endTime) {{
-    const url = `https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=${{interval}}&startTime=${{cursor}}&endTime=${{endTime}}&limit=${{limit}}`;
-    const res = await fetch(url, {{cache: "no-store"}});
-    if (!res.ok) throw new Error("klines HTTP " + res.status);
-    const batch = await res.json();
+    const path = `/api/v3/klines?symbol=BTCUSDT&interval=${{interval}}&startTime=${{cursor}}&endTime=${{endTime}}&limit=${{limit}}`;
+    const batch = await fetchJson(path);
     if (!batch.length) break;
     for (const k of batch) {{
       out.push({{
