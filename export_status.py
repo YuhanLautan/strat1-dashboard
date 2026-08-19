@@ -192,6 +192,48 @@ def simulate_with_live_state(prepared, cfg, leverage, daily_limit_pct, pause_day
     return result
 
 
+def compute_window_summary(trades, cfg):
+    """Return/max-drawdown/win-rate computed fresh from just this slice of
+    trades (a hypothetical $10k restart at the first trade in the window),
+    not the full 9-year backtest -- so the "track record" card matches
+    exactly what's visible in the trades table above it. Per-trade
+    compounding uses leverage-on-margin math (mirrors simulate()'s
+    proceeds = margin + gross_pnl - exit_fee, expressed as a fraction of
+    margin so it doesn't need the trade's actual dollar margin/notional --
+    works the same whether a trade came from the static backtest or the
+    live client-side engine, which doesn't track dollar balance at all)."""
+    leverage = cfg["LEVERAGE"]
+    maker_fee = MAKER_FEE_PCT / 100.0
+    taker_fee = TAKER_FEE_PCT / 100.0
+
+    equity = 1.0
+    peak = 1.0
+    max_dd = 0.0
+    wins = 0
+    for t in trades:
+        direction = 1 if t["direction"] == "LONG" else -1
+        move_pct = (t["exit_price"] - t["entry_price"]) / t["entry_price"] * direction
+        exit_fee_frac = (maker_fee if t["reason"] == "TAKE_PROFIT" else taker_fee) * leverage
+        entry_fee_frac = maker_fee * leverage
+        multiplier = 1 + move_pct * leverage - entry_fee_frac - exit_fee_frac
+        equity *= max(multiplier, 0.0)
+        if move_pct > 0:
+            wins += 1
+        if equity > peak:
+            peak = equity
+        dd = (equity - peak) / peak * 100
+        if dd < max_dd:
+            max_dd = dd
+
+    n = len(trades)
+    return {
+        "return_pct": (equity - 1.0) * 100,
+        "max_drawdown_pct": max_dd,
+        "num_trades": n,
+        "win_rate_pct": (wins / n * 100) if n else 0.0,
+    }
+
+
 def main():
     cfg = load_config()
     df = load_data()
@@ -221,6 +263,8 @@ def main():
         for t, c in zip(df["open_time"].iloc[-WARMUP_N:], df["close"].iloc[-WARMUP_N:])
     ]
 
+    recent_trades = r["trades"][-20:]
+
     out = {
         "config": cfg,
         "summary": {
@@ -230,8 +274,9 @@ def main():
             "num_trades": r["num_trades"],
             "win_rate_pct": r["win_rate_pct"],
         },
+        "recent_summary": compute_window_summary(recent_trades, cfg),
         "live_state": r["live_state"],
-        "last_10_trades": r["trades"][-10:],
+        "last_20_trades": recent_trades,
         "generated_at_data_timestamp": r["live_state"]["as_of"],
         "engine_checkpoint": {
             "as_of_time": r["live_state"]["as_of"],

@@ -28,6 +28,12 @@
     "num_trades": 458,
     "win_rate_pct": 55.021834061135365
   },
+  "recent_summary": {
+    "return_pct": -29.506990408301448,
+    "max_drawdown_pct": -36.962435903899376,
+    "num_trades": 20,
+    "win_rate_pct": 40.0
+  },
   "live_state": {
     "as_of": "2026-08-13 06:30:00+00:00",
     "last_close": 63790.01,
@@ -48,7 +54,117 @@
     "rsi_period": 5,
     "ma_period": 50
   },
-  "last_10_trades": [
+  "last_20_trades": [
+    {
+      "entry_time": "2026-06-02 16:15:00+00:00",
+      "exit_time": "2026-06-02 22:45:00+00:00",
+      "direction": "SHORT",
+      "reason": "TAKE_PROFIT",
+      "entry_price": 67928.45,
+      "exit_price": 66569.881,
+      "margin_usd": 856213.7218403408,
+      "notional_usd": 4285353.963164869,
+      "balance_after_usd": 941063.7303110051
+    },
+    {
+      "entry_time": "2026-06-22 00:30:00+00:00",
+      "exit_time": "2026-06-22 12:00:00+00:00",
+      "direction": "SHORT",
+      "reason": "STOP_LOSS",
+      "entry_price": 63720.01,
+      "exit_price": 64756.01,
+      "margin_usd": 940122.6665806941,
+      "notional_usd": 4705318.651555026,
+      "balance_after_usd": 861267.977154623
+    },
+    {
+      "entry_time": "2026-06-22 14:30:00+00:00",
+      "exit_time": "2026-06-22 22:30:00+00:00",
+      "direction": "LONG",
+      "reason": "STOP_LOSS",
+      "entry_price": 64970.02,
+      "exit_price": 63838.5,
+      "margin_usd": 860406.7091774684,
+      "notional_usd": 4306339.885773115,
+      "balance_after_usd": 783254.1824920415
+    },
+    {
+      "entry_time": "2026-07-08 00:15:00+00:00",
+      "exit_time": "2026-07-08 08:15:00+00:00",
+      "direction": "SHORT",
+      "reason": "TAKE_PROFIT",
+      "entry_price": 63494.01,
+      "exit_price": 62224.1298,
+      "margin_usd": 782470.9283095495,
+      "notional_usd": 3916270.9124602075,
+      "balance_after_usd": 860013.0923762616
+    },
+    {
+      "entry_time": "2026-07-08 10:30:00+00:00",
+      "exit_time": "2026-07-09 15:00:00+00:00",
+      "direction": "SHORT",
+      "reason": "STOP_LOSS",
+      "entry_price": 62121.08,
+      "exit_price": 63097.53,
+      "margin_usd": 859153.0792838853,
+      "notional_usd": 4300065.461881308,
+      "balance_after_usd": 789412.4811562389
+    },
+    {
+      "entry_time": "2026-07-09 15:30:00+00:00",
+      "exit_time": "2026-07-10 08:15:00+00:00",
+      "direction": "LONG",
+      "reason": "TAKE_PROFIT",
+      "entry_price": 62985.27,
+      "exit_price": 64244.975399999996,
+      "margin_usd": 788623.0686750826,
+      "notional_usd": 3947062.4057811946,
+      "balance_after_usd": 866774.9043095502
+    },
+    {
+      "entry_time": "2026-07-10 10:15:00+00:00",
+      "exit_time": "2026-07-13 03:00:00+00:00",
+      "direction": "LONG",
+      "reason": "STOP_LOSS",
+      "entry_price": 64294.64,
+      "exit_price": 63024.66,
+      "margin_usd": 865908.1294052406,
+      "notional_usd": 4333874.521547751,
+      "balance_after_usd": 778136.3273396371
+    },
+    {
+      "entry_time": "2026-07-17 01:00:00+00:00",
+      "exit_time": "2026-07-17 13:30:00+00:00",
+      "direction": "SHORT",
+      "reason": "TAKE_PROFIT",
+      "entry_price": 63886.0,
+      "exit_price": 62608.28,
+      "margin_usd": 777358.1910122974,
+      "notional_usd": 3890681.6366981855,
+      "balance_after_usd": 854393.6874189214
+    },
+    {
+      "entry_time": "2026-07-17 14:00:00+00:00",
+      "exit_time": "2026-07-17 18:30:00+00:00",
+      "direction": "SHORT",
+      "reason": "STOP_LOSS",
+      "entry_price": 63153.99,
+      "exit_price": 64151.41,
+      "margin_usd": 853539.2937315025,
+      "notional_usd": 4271968.437094606,
+      "balance_after_usd": 783934.1478886947
+    },
+    {
+      "entry_time": "2026-07-17 20:15:00+00:00",
+      "exit_time": "2026-07-20 15:45:00+00:00",
+      "direction": "LONG",
+      "reason": "TAKE_PROFIT",
+      "entry_price": 64006.55,
+      "exit_price": 65286.681000000004,
+      "margin_usd": 783150.213740806,
+      "notional_usd": 3919670.7394434735,
+      "balance_after_usd": 860759.6943817867
+    },
     {
       "entry_time": "2026-07-20 17:45:00+00:00",
       "exit_time": "2026-07-21 13:45:00+00:00",
