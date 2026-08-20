@@ -250,10 +250,19 @@ def build_html(data):
   .gate-day.open {{ background: var(--up); border-color: var(--up); }}
   .gate-day.closed {{ background: var(--down); border-color: var(--down); opacity: 0.75; }}
   .gate-day.unknown {{ background: var(--panel2); }}
-  .gate-table-scroll {{ max-height: 220px; overflow-y: auto; }}
+  .gate-table-scroll {{ max-height: 220px; overflow-y: auto; margin-top: 8px; }}
   .gate-card table {{ font-size: 0.78rem; }}
   .gate-card th, .gate-card td {{ padding: 5px 8px; }}
   .gate-card thead th {{ position: sticky; top: 0; background: var(--panel); }}
+  .gate-periods-label {{ font-size: 0.72rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; margin: 10px 0 6px; }}
+  .gate-period {{ background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 6px; padding: 8px 10px; }}
+  .gate-period summary {{
+    cursor: pointer; display: flex; gap: 10px; flex-wrap: wrap; align-items: center;
+    font-size: 0.82rem; list-style: none;
+  }}
+  .gate-period summary::-webkit-details-marker {{ display: none; }}
+  .gate-period summary::before {{ content: "▸"; color: var(--muted); margin-right: 2px; }}
+  .gate-period[open] summary::before {{ content: "▾"; }}
   td.pass {{ color: var(--up); }}
   td.fail {{ color: var(--down); }}
 </style>
@@ -298,15 +307,8 @@ def build_html(data):
     <h2>Consolidation gate <span id="gate-live-tag" class="mini-badge" style="margin-left:8px;">computing…</span></h2>
     <div id="gate-current"><p class="manual-note">Loading gate history…</p></div>
     <div id="gate-timeline" class="gate-timeline"></div>
-    <div class="table-scroll gate-table-scroll">
-    <table>
-      <thead><tr>
-        <th>Date (UTC)</th><th>Daily high</th><th>Daily low</th>
-        <th>14d window range</th><th>Raw hit (≤12%)</th><th>Gate live that day</th>
-      </tr></thead>
-      <tbody id="gate-tbody"></tbody>
-    </table>
-    </div>
+    <div class="gate-periods-label">Last 10 consolidation periods (most recent first) — click to see daily data</div>
+    <div id="gate-periods"></div>
   </div>
 
   <div class="card">
@@ -493,9 +495,38 @@ async function fetchKlines(interval, startTime, endTime, limit) {{
       }});
     }}
     if (batch.length < limit) break;
-    cursor = batch[batch.length - 1].closeTime + 1;
+    cursor = batch[batch.length - 1][6] + 1; // batch is raw Binance rows here, not yet the {{...}} objects pushed to out -- index 6 is closeTime
   }}
   return out;
+}}
+
+// Full daily history, cached across ticks: past days never change, so after
+// the one-time full fetch (needed to find the last ~10 consolidation
+// periods, which can span months) each subsequent tick only asks Binance
+// for whatever's new since the last cached day instead of re-fetching years
+// of candles every 60s.
+const HISTORY_START_MS = Date.UTC(2017, 7, 17);
+let DAILY_HISTORY_CACHE = null;
+
+async function getDailyHistory(now) {{
+  if (!DAILY_HISTORY_CACHE) {{
+    const raw = await fetchKlines("1d", HISTORY_START_MS, now, 1000);
+    DAILY_HISTORY_CACHE = raw.filter(k => k.closeTime <= now)
+      .map(k => ({{date: dateStr(k.openTime), high: k.high, low: k.low, close: k.close}}));
+  }} else {{
+    const lastDate = DAILY_HISTORY_CACHE[DAILY_HISTORY_CACHE.length - 1].date;
+    const fetchFrom = new Date(lastDate + "T00:00:00Z").getTime() + 86400000;
+    if (fetchFrom < now) {{
+      const raw = await fetchKlines("1d", fetchFrom, now, 1000);
+      const known = new Set(DAILY_HISTORY_CACHE.map(d => d.date));
+      for (const k of raw) {{
+        if (k.closeTime > now) continue;
+        const d = dateStr(k.openTime);
+        if (!known.has(d)) {{ DAILY_HISTORY_CACHE.push({{date: d, high: k.high, low: k.low, close: k.close}}); known.add(d); }}
+      }}
+    }}
+  }}
+  return DAILY_HISTORY_CACHE;
 }}
 
 function computeRSIWilder(closes, period) {{
@@ -570,22 +601,6 @@ function renderGateHistory(days, rawHit, flag, rangePct, gateMap) {{
       No new entries regardless of RSI/MA until it reopens — ${{needText}}. Existing open positions are unaffected.</p>`;
   }}
 
-  // For each effective (shifted) day, find the date its current OPEN/CLOSED
-  // streak actually began -- i.e. when it last flipped -- so the table can
-  // say "OPEN since 2026-07-15" instead of the less useful "(from <next
-  // calendar day>)", which was just an artifact of the one-day shift math.
-  const runStartByEffDate = new Map();
-  {{
-    let runStart = null, prevVal = null;
-    for (let i = 0; i < n; i++) {{
-      const eff = addDaysStr(days[i].date, 1);
-      const val = flag[i];
-      if (prevVal === null || val !== prevVal) runStart = eff;
-      runStartByEffDate.set(eff, runStart);
-      prevVal = val;
-    }}
-  }}
-
   const timelineEl = document.getElementById("gate-timeline");
   const recent = [];
   for (let i = Math.max(0, n - 30); i < n; i++) {{
@@ -597,23 +612,74 @@ function renderGateHistory(days, rawHit, flag, rangePct, gateMap) {{
     `<div class="gate-day ${{r.open ? 'open' : 'closed'}}" title="${{days[r.i].date}}: gate ${{r.open ? 'OPEN' : 'CLOSED'}}"></div>`
   ).join("");
 
-  const tbody = document.getElementById("gate-tbody");
-  const rows = [];
-  for (let i = n - 1; i >= Math.max(0, n - 20); i--) {{
-    const eff = addDaysStr(days[i].date, 1);
-    const open = gateMap.get(eff) || false;
-    const rp = rangePct[i];
-    const since = runStartByEffDate.get(eff);
-    rows.push(`<tr>
-      <td>${{days[i].date}}</td>
-      <td>${{fmtUsd(days[i].high)}}</td>
-      <td>${{fmtUsd(days[i].low)}}</td>
-      <td>${{rp === null ? "—" : rp.toFixed(2) + "%"}}</td>
-      <td class="${{rp === null ? "" : (rawHit[i] ? "pass" : "fail")}}">${{rp === null ? "warming up" : (rawHit[i] ? "PASS" : "FAIL")}}</td>
-      <td class="${{open ? "up" : "down"}}">${{open ? "OPEN" : "CLOSED"}} (since ${{since}})</td>
-    </tr>`);
+  // Group the effective (shifted) daily flags into contiguous OPEN runs --
+  // each run is one actual consolidation episode, not just a single day.
+  const eff = days.map((d, i) => ({{
+    effDate: addDaysStr(d.date, 1), open: flag[i], rangePct: rangePct[i], rawHit: rawHit[i],
+    sourceDate: d.date, high: d.high, low: d.low, close: d.close,
+  }}));
+  const periods = [];
+  let cur = null;
+  for (let i = 0; i < eff.length; i++) {{
+    if (eff[i].open) {{
+      if (!cur) cur = {{ days: [] }};
+      cur.days.push(eff[i]);
+    }} else if (cur) {{
+      cur.closedAtDay = eff[i]; // the first FAIL day right after the period ended
+      periods.push(cur);
+      cur = null;
+    }}
   }}
-  tbody.innerHTML = rows.join("");
+  if (cur) {{ cur.ongoing = true; periods.push(cur); }}
+
+  const last10 = periods.slice(-10).reverse();
+  const periodsEl = document.getElementById("gate-periods");
+  if (!last10.length) {{
+    periodsEl.innerHTML = `<p class="manual-note">No consolidation periods found yet in the fetched history.</p>`;
+  }} else {{
+    periodsEl.innerHTML = last10.map(p => {{
+      const startDate = p.days[0].effDate;
+      const endDate = p.ongoing ? null : p.days[p.days.length - 1].effDate;
+      const durationDays = p.days.length;
+      const openPrice = p.days[0].close;
+      const closePrice = p.days[p.days.length - 1].close;
+      const priceChangePct = (closePrice - openPrice) / openPrice * 100;
+      let lo = Infinity, hi = -Infinity, tightest = Infinity;
+      for (const d of p.days) {{
+        lo = Math.min(lo, d.low); hi = Math.max(hi, d.high);
+        if (d.rangePct !== null) tightest = Math.min(tightest, d.rangePct);
+      }}
+      const statusLabel = p.ongoing ? `ONGOING (${{durationDays}} days so far)` : `CLOSED after ${{durationDays}} days`;
+      const statusClass = p.ongoing ? "up" : "down";
+      const closeInfo = p.closedAtDay
+        ? ` · closed when range expanded to ${{p.closedAtDay.rangePct.toFixed(2)}}% on ${{p.closedAtDay.sourceDate}}`
+        : "";
+
+      const dayRows = p.days.map(d => `<tr>
+          <td>${{d.sourceDate}}</td>
+          <td>${{fmtUsd(d.high)}}</td>
+          <td>${{fmtUsd(d.low)}}</td>
+          <td>${{d.rangePct === null ? "—" : d.rangePct.toFixed(2) + "%"}}</td>
+          <td class="${{d.rawHit ? "pass" : "fail"}}">${{d.rawHit ? "PASS" : "FAIL"}}</td>
+        </tr>`).join("");
+
+      return `<details class="gate-period">
+        <summary>
+          <span class="val ${{statusClass}}">${{startDate}} → ${{endDate || "now"}}</span>
+          <span class="mini-badge">${{statusLabel}}</span>
+          <span class="mini-badge">BTC ${{fmtUsd(lo)}}–${{fmtUsd(hi)}} (${{priceChangePct >= 0 ? "+" : ""}}${{priceChangePct.toFixed(1)}}%)</span>
+          <span class="mini-badge">tightest ${{tightest === Infinity ? "—" : tightest.toFixed(2) + "%"}}</span>
+        </summary>
+        <p class="manual-note" style="margin:8px 0;">${{p.ongoing ? "Still open as of the latest daily close" : "Closed"}}${{closeInfo}}.</p>
+        <div class="table-scroll gate-table-scroll">
+        <table>
+          <thead><tr><th>Date (UTC)</th><th>Daily high</th><th>Daily low</th><th>14d window range</th><th>Raw hit (≤${{CFG.CAUSAL_DETECTOR_THRESHOLD_PCT}}%)</th></tr></thead>
+          <tbody>${{dayRows}}</tbody>
+        </table>
+        </div>
+      </details>`;
+    }}).join("");
+  }}
 
   const tag = document.getElementById("gate-live-tag");
   tag.textContent = "live · computed " + nowTimeOnlyMY();
@@ -752,9 +818,7 @@ async function runLiveEngine() {{
     const maArr = computeMA(allCloses, CFG.MA_PERIOD);
     const offset = warmupCloses.length;
 
-    const dailyStart = now - 40 * 86400000;
-    const dailyRaw = await fetchKlines("1d", dailyStart, now, 45);
-    const days = dailyRaw.filter(k => k.closeTime <= now).map(k => ({{date: dateStr(k.openTime), high: k.high, low: k.low}}));
+    const days = await getDailyHistory(now);
     const {{rawHit, flag: dayFlags, rangePct}} = computeDailyFlags(days, CFG.CAUSAL_DETECTOR_LOOKBACK_DAYS, CFG.CAUSAL_DETECTOR_THRESHOLD_PCT, CFG.CAUSAL_DETECTOR_PERSISTENCE_DAYS);
     const gateMap = new Map();
     for (let i = 0; i < days.length; i++) gateMap.set(addDaysStr(days[i].date, 1), dayFlags[i]);
