@@ -36,6 +36,9 @@
   .status-badge.flat { background: rgba(139,148,165,0.15); color: var(--muted); border: 1px solid rgba(139,148,165,0.4); }
   .mini-badges { display: flex; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; }
   .mini-badge { font-size: 0.75rem; color: var(--muted); background: var(--panel2); border: 1px solid var(--border); padding: 3px 10px; border-radius: 6px; }
+  .pnl-badge-val { font-weight: 700; }
+  .pnl-badge-val.up { color: var(--up); }
+  .pnl-badge-val.down { color: var(--down); }
   .status-grid {
     display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px 22px; margin-bottom: 14px;
   }
@@ -717,6 +720,16 @@ function renderGateHistory(days, rawHit, flag, rangePct, gateMap, newTrades) {
       const tradesInfo = periodTrades.length
         ? `${periodTrades.length} trade${periodTrades.length > 1 ? "s" : ""}, ${periodTrades.filter(t => t.reason === "TAKE_PROFIT").length} TP / ${periodTrades.filter(t => t.reason === "STOP_LOSS").length} SL`
         : "no trades fired during this period";
+      let pnlBadges = "";
+      if (periodTrades.length) {
+        const unlev = computeWindowSummary(periodTrades, 1);
+        const lev = computeWindowSummary(periodTrades, CFG.LEVERAGE);
+        const cls = (x) => "pnl-badge-val " + (x >= 0 ? "up" : "down");
+        const sign = (x) => (x >= 0 ? "+" : "") + x.toFixed(2) + "%";
+        pnlBadges = `
+          <span class="mini-badge">P&amp;L unleveraged: <b class="${cls(unlev.return_pct)}">${sign(unlev.return_pct)}</b></span>
+          <span class="mini-badge">P&amp;L ${CFG.LEVERAGE}x: <b class="${cls(lev.return_pct)}">${sign(lev.return_pct)}</b></span>`;
+      }
 
       const tradeRows = periodTrades.length
         ? periodTrades.map(tradeRowHtml).join("")
@@ -728,7 +741,7 @@ function renderGateHistory(days, rawHit, flag, rangePct, gateMap, newTrades) {
           <span class="mini-badge">${statusLabel}</span>
           <span class="mini-badge">BTC ${fmtUsd(lo)}–${fmtUsd(hi)} (${priceChangePct >= 0 ? "+" : ""}${priceChangePct.toFixed(1)}%)</span>
           <span class="mini-badge">tightest ${tightest === Infinity ? "—" : tightest.toFixed(2) + "%"}</span>
-          <span class="mini-badge">${tradesInfo}</span>
+          <span class="mini-badge">${tradesInfo}</span>${pnlBadges}
         </summary>
         <p class="manual-note" style="margin:8px 0;">${p.ongoing ? "Still open as of the latest daily close" : "Closed"}${closeInfo}.</p>
         <div class="table-scroll gate-table-scroll">
@@ -802,18 +815,21 @@ function renderStatusCard(st) {
 
 function fmtPct(x) { return (x >= 0 ? "+" : "") + x.toFixed(2) + "%"; }
 
-function computeWindowSummary(tradesOldestFirst) {
+function computeWindowSummary(tradesOldestFirst, leverage) {
   // Mirrors export_status.py's compute_window_summary exactly: a fresh
   // hypothetical $10k restart at the first trade in the window, so this
   // card's numbers always match whatever's actually listed in the table.
+  // leverage defaults to the strategy's actual configured leverage; pass 1
+  // to get the unleveraged (spot) equivalent of the same trade sequence.
+  const lev = leverage === undefined ? CFG.LEVERAGE : leverage;
   const makerFee = 0.02 / 100, takerFee = 0.05 / 100;
   let equity = 1.0, peak = 1.0, maxDd = 0.0, wins = 0;
   for (const t of tradesOldestFirst) {
     const dir = t.direction === "LONG" ? 1 : -1;
     const movePct = (t.exit_price - t.entry_price) / t.entry_price * dir;
-    const exitFeeFrac = (t.reason === "TAKE_PROFIT" ? makerFee : takerFee) * CFG.LEVERAGE;
-    const entryFeeFrac = makerFee * CFG.LEVERAGE;
-    const multiplier = 1 + movePct * CFG.LEVERAGE - entryFeeFrac - exitFeeFrac;
+    const exitFeeFrac = (t.reason === "TAKE_PROFIT" ? makerFee : takerFee) * lev;
+    const entryFeeFrac = makerFee * lev;
+    const multiplier = 1 + movePct * lev - entryFeeFrac - exitFeeFrac;
     equity *= Math.max(multiplier, 0);
     if (movePct > 0) wins++;
     if (equity > peak) peak = equity;
