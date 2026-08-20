@@ -242,6 +242,13 @@ def build_html(data):
   .live-meta {{ color: var(--muted); font-size: 0.78rem; }}
   .live-distances {{ display: flex; gap: 22px; flex-wrap: wrap; margin-top: 12px; font-size: 0.85rem; }}
   .live-distances span.lbl {{ display: block; }}
+  .gate-timeline {{ display: flex; gap: 3px; margin: 14px 0; flex-wrap: wrap; }}
+  .gate-day {{ width: 16px; height: 28px; border-radius: 3px; background: var(--panel2); border: 1px solid var(--border); cursor: default; }}
+  .gate-day.open {{ background: var(--up); border-color: var(--up); }}
+  .gate-day.closed {{ background: var(--down); border-color: var(--down); opacity: 0.75; }}
+  .gate-day.unknown {{ background: var(--panel2); }}
+  td.pass {{ color: var(--up); }}
+  td.fail {{ color: var(--down); }}
 </style>
 </head>
 <body>
@@ -277,6 +284,21 @@ def build_html(data):
       <span class="mini-badge">MA({live['ma_period']}): ${fmt_num(live['current_ma'])}</span>
     </div>
     {live_body}
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Consolidation gate <span id="gate-live-tag" class="mini-badge" style="margin-left:8px;">computing…</span></h2>
+    <div id="gate-current"><p class="manual-note">Loading gate history…</p></div>
+    <div id="gate-timeline" class="gate-timeline"></div>
+    <div class="table-scroll">
+    <table>
+      <thead><tr>
+        <th>Date (UTC)</th><th>Daily high</th><th>Daily low</th>
+        <th>14d window range</th><th>Raw hit (≤12%)</th><th>Gate live that day</th>
+      </tr></thead>
+      <tbody id="gate-tbody"></tbody>
+    </table>
     </div>
   </div>
 
@@ -500,18 +522,78 @@ function computeMA(closes, period) {{
 function computeDailyFlags(days, lookback, thresholdPct, persistence) {{
   const n = days.length;
   const rawHit = new Array(n).fill(false);
+  const rangePct = new Array(n).fill(null);
   for (let i = 0; i < n; i++) {{
     const start = Math.max(0, i - lookback + 1);
     if (i - start + 1 < lookback) continue;
     let hi = -Infinity, lo = Infinity;
     for (let j = start; j <= i; j++) {{ hi = Math.max(hi, days[j].high); lo = Math.min(lo, days[j].low); }}
-    rawHit[i] = ((hi - lo) / lo * 100) <= thresholdPct;
+    rangePct[i] = (hi - lo) / lo * 100;
+    rawHit[i] = rangePct[i] <= thresholdPct;
   }}
-  if (persistence <= 1) return rawHit;
-  const flag = new Array(n).fill(false);
-  let run = 0;
-  for (let i = 0; i < n; i++) {{ run = rawHit[i] ? run + 1 : 0; flag[i] = run >= persistence; }}
-  return flag;
+  let flag;
+  if (persistence <= 1) {{ flag = rawHit; }}
+  else {{
+    flag = new Array(n).fill(false);
+    let run = 0;
+    for (let i = 0; i < n; i++) {{ run = rawHit[i] ? run + 1 : 0; flag[i] = run >= persistence; }}
+  }}
+  return {{ rawHit, flag, rangePct }};
+}}
+
+function renderGateHistory(days, rawHit, flag, rangePct, gateMap) {{
+  const n = days.length;
+  const todayEffective = dateStr(Date.now());
+  const currentGateOpen = gateMap.get(todayEffective) || false;
+
+  // how many more consecutive tight days are needed before it reopens, if closed
+  let currentRun = 0;
+  for (let i = n - 1; i >= 0; i--) {{ if (rawHit[i]) currentRun++; else break; }}
+
+  const currentEl = document.getElementById("gate-current");
+  if (currentGateOpen) {{
+    currentEl.innerHTML = `<p class="manual-note">Gate is currently <b class="val up">OPEN</b> as of ${{todayEffective}} (UTC).
+      New entries are allowed if RSI/MA also line up.</p>`;
+  }} else {{
+    const need = Math.max(0, CFG.CAUSAL_DETECTOR_PERSISTENCE_DAYS - currentRun);
+    const needText = need > 0
+      ? `needs ${{need}} more consecutive day${{need > 1 ? "s" : ""}} with a ≤${{CFG.CAUSAL_DETECTOR_THRESHOLD_PCT}}% rolling ${{CFG.CAUSAL_DETECTOR_LOOKBACK_DAYS}}-day range before it reopens`
+      : "should reopen at the next daily close if today stays tight";
+    currentEl.innerHTML = `<p class="manual-note">Gate is currently <b class="val down">CLOSED</b> as of ${{todayEffective}} (UTC).
+      No new entries regardless of RSI/MA until it reopens — ${{needText}}. Existing open positions are unaffected.</p>`;
+  }}
+
+  const timelineEl = document.getElementById("gate-timeline");
+  const recent = [];
+  for (let i = Math.max(0, n - 30); i < n; i++) {{
+    const eff = addDaysStr(days[i].date, 1);
+    const open = gateMap.get(eff) || false;
+    recent.push({{i, open}});
+  }}
+  timelineEl.innerHTML = recent.map(r =>
+    `<div class="gate-day ${{r.open ? 'open' : 'closed'}}" title="${{days[r.i].date}}: gate ${{r.open ? 'OPEN' : 'CLOSED'}}"></div>`
+  ).join("");
+
+  const tbody = document.getElementById("gate-tbody");
+  const rows = [];
+  for (let i = n - 1; i >= Math.max(0, n - 20); i--) {{
+    const eff = addDaysStr(days[i].date, 1);
+    const open = gateMap.get(eff) || false;
+    const rp = rangePct[i];
+    rows.push(`<tr>
+      <td>${{days[i].date}}</td>
+      <td>${{fmtUsd(days[i].high)}}</td>
+      <td>${{fmtUsd(days[i].low)}}</td>
+      <td>${{rp === null ? "—" : rp.toFixed(2) + "%"}}</td>
+      <td class="${{rp === null ? "" : (rawHit[i] ? "pass" : "fail")}}">${{rp === null ? "warming up" : (rawHit[i] ? "PASS" : "FAIL")}}</td>
+      <td class="${{open ? "up" : "down"}}">${{open ? "OPEN" : "CLOSED"}} (from ${{eff}})</td>
+    </tr>`);
+  }}
+  tbody.innerHTML = rows.join("");
+
+  const tag = document.getElementById("gate-live-tag");
+  tag.textContent = "live · computed " + nowTimeOnlyMY();
+  tag.style.color = "var(--up)";
 }}
 
 function statusLabel(s) {{
@@ -649,9 +731,10 @@ async function runLiveEngine() {{
     const dailyStart = now - 40 * 86400000;
     const dailyRaw = await fetchKlines("1d", dailyStart, now, 45);
     const days = dailyRaw.filter(k => k.closeTime <= now).map(k => ({{date: dateStr(k.openTime), high: k.high, low: k.low}}));
-    const dayFlags = computeDailyFlags(days, CFG.CAUSAL_DETECTOR_LOOKBACK_DAYS, CFG.CAUSAL_DETECTOR_THRESHOLD_PCT, CFG.CAUSAL_DETECTOR_PERSISTENCE_DAYS);
+    const {{rawHit, flag: dayFlags, rangePct}} = computeDailyFlags(days, CFG.CAUSAL_DETECTOR_LOOKBACK_DAYS, CFG.CAUSAL_DETECTOR_THRESHOLD_PCT, CFG.CAUSAL_DETECTOR_PERSISTENCE_DAYS);
     const gateMap = new Map();
     for (let i = 0; i < days.length; i++) gateMap.set(addDaysStr(days[i].date, 1), dayFlags[i]);
+    renderGateHistory(days, rawHit, dayFlags, rangePct, gateMap);
 
     let hasPosition = CHECKPOINT.has_position;
     let direction = CHECKPOINT.direction === "LONG" ? 1 : (CHECKPOINT.direction === "SHORT" ? -1 : null);
@@ -753,6 +836,8 @@ async function runLiveEngine() {{
     tag.style.color = "var(--down)";
     document.getElementById("trades-live-tag").textContent = "showing backtest snapshot";
     document.getElementById("track-live-tag").textContent = "showing backtest snapshot";
+    document.getElementById("gate-live-tag").textContent = "unavailable";
+    document.getElementById("gate-current").innerHTML = `<p class="manual-note">Couldn't reach Binance to compute gate history right now.</p>`;
   }}
 }}
 
