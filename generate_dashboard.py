@@ -57,6 +57,23 @@ def trade_pnl_pct(t, leverage):
     return (move_pct - maker_fee - exit_fee) * leverage * 100
 
 
+def running_cumulative_pcts(trades_chronological, leverage):
+    """Compounded % return of the full backtest as of each trade in order
+    -- i.e. entry i is "what the full 9-year track record stood at" right
+    after trade i closed, not that trade's own isolated gain."""
+    maker_fee, taker_fee = 0.02 / 100, 0.05 / 100
+    equity = 1.0
+    out = []
+    for t in trades_chronological:
+        direction = 1 if t["direction"] == "LONG" else -1
+        move_pct = (t["exit_price"] - t["entry_price"]) / t["entry_price"] * direction
+        exit_fee = maker_fee if t["reason"] == "TAKE_PROFIT" else taker_fee
+        multiplier = 1 + move_pct * leverage - maker_fee * leverage - exit_fee * leverage
+        equity *= max(multiplier, 0.0)
+        out.append((equity - 1.0) * 100)
+    return out
+
+
 def fmt_time_my(ts):
     """Malaysia has no DST, so a fixed UTC+8 offset is exact year-round --
     no zoneinfo/tz-database dependency needed."""
@@ -152,14 +169,19 @@ def build_html(data):
         "CAUSAL_DETECTOR_PERSISTENCE_DAYS": cfg["CAUSAL_DETECTOR_PERSISTENCE_DAYS"],
     })
 
+    all_trades = data["all_trades"]
+    cum_unlev_all = running_cumulative_pcts(all_trades, 1)
+    cum_lev_all = running_cumulative_pcts(all_trades, cfg["LEVERAGE"])
+    # trades == all_trades[-len(trades):], so these slices line up index-for-index
+    cum_unlev_window = cum_unlev_all[-len(trades):] if trades else []
+    cum_lev_window = cum_lev_all[-len(trades):] if trades else []
+
     rows_trades = ""
-    for t in reversed(trades):
+    for t, unlev_pct, lev_pct in reversed(list(zip(trades, cum_unlev_window, cum_lev_window))):
         d = t["direction"]
         reason = t["reason"]
         dir_class = "up" if d == "LONG" else "down"
         reason_class = "up" if reason == "TAKE_PROFIT" else ("down" if reason == "STOP_LOSS" else "")
-        unlev_pct = trade_pnl_pct(t, 1)
-        lev_pct = trade_pnl_pct(t, cfg["LEVERAGE"])
         unlev_class = "up" if unlev_pct >= 0 else "down"
         lev_class = "up" if lev_pct >= 0 else "down"
         rows_trades += f"""
@@ -334,7 +356,7 @@ def build_html(data):
     <table>
       <thead><tr>
         <th>Entry time</th><th>Exit time</th><th>Dir</th><th>Exit reason</th>
-        <th>Entry px</th><th>Exit px</th><th>% gained (1x)</th><th>% gained ({cfg['LEVERAGE']}x)</th>
+        <th>Entry px</th><th>Exit px</th><th>Cumulative return (1x)</th><th>Cumulative return ({cfg['LEVERAGE']}x)</th>
       </tr></thead>
       <tbody id="trades-tbody">{rows_trades}
       </tbody>
@@ -611,7 +633,7 @@ function tradesInRange(startMs, endMs, newTrades) {{
   return fromStatic.concat(fromLive).sort((a, b) => new Date(a.entry_time.replace(" ", "T")) - new Date(b.entry_time.replace(" ", "T")));
 }}
 
-function renderGateHistory(days, rawHit, flag, rangePct, gateMap, newTrades) {{
+function renderGateHistory(days, rawHit, flag, rangePct, gateMap, newTrades, cumMap) {{
   const n = days.length;
   const todayEffective = dateStr(Date.now());
   const currentGateOpen = gateMap.get(todayEffective) || false;
@@ -705,7 +727,7 @@ function renderGateHistory(days, rawHit, flag, rangePct, gateMap, newTrades) {{
       }}
 
       const tradeRows = periodTrades.length
-        ? periodTrades.map(tradeRowHtml).join("")
+        ? periodTrades.map(t => tradeRowHtml(t, cumMap)).join("")
         : `<tr><td colspan="8" style="color:var(--muted);">No trades fired while this gate was open (RSI/MA conditions never lined up).</td></tr>`;
 
       return `<details class="gate-period">
@@ -721,7 +743,7 @@ function renderGateHistory(days, rawHit, flag, rangePct, gateMap, newTrades) {{
         <table>
           <thead><tr>
             <th>Entry time</th><th>Exit time</th><th>Dir</th><th>Exit reason</th>
-            <th>Entry px</th><th>Exit px</th><th>% gained (1x)</th><th>% gained (${{CFG.LEVERAGE}}x)</th>
+            <th>Entry px</th><th>Exit px</th><th>Cumulative return (1x)</th><th>Cumulative return (${{CFG.LEVERAGE}}x)</th>
           </tr></thead>
           <tbody>${{tradeRows}}</tbody>
         </table>
@@ -835,21 +857,38 @@ function renderTrackRecord(newTrades) {{
   tag.style.color = "var(--up)";
 }}
 
-function tradePnlPct(t, leverage) {{
-  // Single-trade % gained (not compounded), net of entry+exit fees.
-  // leverage=1 gives the unleveraged/spot figure.
-  const dir = t.direction === "LONG" ? 1 : -1;
-  const movePct = (t.exit_price - t.entry_price) / t.entry_price * dir;
+function computeRunningCumulative(tradesChronological, leverage) {{
+  // Compounded % return of the full backtest as of each trade in order --
+  // "what the full 9-year track record stood at" right after that trade
+  // closed, not that trade's own isolated gain.
   const makerFee = 0.02 / 100, takerFee = 0.05 / 100;
-  const exitFee = t.reason === "TAKE_PROFIT" ? makerFee : takerFee;
-  return (movePct - makerFee - exitFee) * leverage * 100;
+  let equity = 1.0;
+  const out = [];
+  for (const t of tradesChronological) {{
+    const dir = t.direction === "LONG" ? 1 : -1;
+    const movePct = (t.exit_price - t.entry_price) / t.entry_price * dir;
+    const exitFee = t.reason === "TAKE_PROFIT" ? makerFee : takerFee;
+    const multiplier = 1 + movePct * leverage - makerFee * leverage - exitFee * leverage;
+    equity *= Math.max(multiplier, 0);
+    out.push((equity - 1) * 100);
+  }}
+  return out;
 }}
 
-function tradeRowHtml(t) {{
+function buildCumulativeMap(newTrades) {{
+  const full = ALL_STATIC_TRADES.concat(newTrades)
+    .sort((a, b) => new Date(a.entry_time.replace(" ", "T")) - new Date(b.entry_time.replace(" ", "T")));
+  const cumUnlev = computeRunningCumulative(full, 1);
+  const cumLev = computeRunningCumulative(full, CFG.LEVERAGE);
+  const map = new Map();
+  full.forEach((t, i) => map.set(t.entry_time, {{unlev: cumUnlev[i], lev: cumLev[i]}}));
+  return map;
+}}
+
+function tradeRowHtml(t, cumMap) {{
   const dirClass = t.direction === "LONG" ? "up" : "down";
   const reasonClass = t.reason === "TAKE_PROFIT" ? "up" : (t.reason === "STOP_LOSS" ? "down" : "");
-  const unlevPct = tradePnlPct(t, 1);
-  const levPct = tradePnlPct(t, CFG.LEVERAGE);
+  const cum = cumMap.get(t.entry_time) || {{unlev: 0, lev: 0}};
   const fmtP = (x) => (x >= 0 ? "+" : "") + x.toFixed(2) + "%";
   return `<tr>
       <td>${{fmtTimeMY(t.entry_time)}}</td>
@@ -858,19 +897,19 @@ function tradeRowHtml(t) {{
       <td class="${{reasonClass}}">${{t.reason.replace(/_/g, " ")}}</td>
       <td>${{fmtUsd(t.entry_price)}}</td>
       <td>${{fmtUsd(t.exit_price)}}</td>
-      <td class="${{unlevPct >= 0 ? "up" : "down"}}">${{fmtP(unlevPct)}}</td>
-      <td class="${{levPct >= 0 ? "up" : "down"}}">${{fmtP(levPct)}}</td>
+      <td class="${{cum.unlev >= 0 ? "up" : "down"}}">${{fmtP(cum.unlev)}}</td>
+      <td class="${{cum.lev >= 0 ? "up" : "down"}}">${{fmtP(cum.lev)}}</td>
     </tr>`;
 }}
 
-function renderTradesTable(newTrades) {{
+function renderTradesTable(newTrades, cumMap) {{
   // newTrades (live-computed, no $ balance tracked) + STATIC_TRADES (from the
   // backtest checkpoint, which do have $ balance) -- newest first, capped at 20.
   const merged = newTrades.slice().reverse().map(t => ({{...t, live: true}}))
     .concat(STATIC_TRADES.slice().reverse().map(t => ({{...t, live: false}})))
     .slice(0, 20);
   renderTrackRecord(newTrades);
-  document.getElementById("trades-tbody").innerHTML = merged.map(tradeRowHtml).join("");
+  document.getElementById("trades-tbody").innerHTML = merged.map(t => tradeRowHtml(t, cumMap)).join("");
 }}
 
 async function runLiveEngine() {{
@@ -975,8 +1014,9 @@ async function runLiveEngine() {{
     }};
 
     renderStatusCard(st);
-    renderTradesTable(newTrades);
-    renderGateHistory(days, rawHit, dayFlags, rangePct, gateMap, newTrades);
+    const cumMap = buildCumulativeMap(newTrades);
+    renderTradesTable(newTrades, cumMap);
+    renderGateHistory(days, rawHit, dayFlags, rangePct, gateMap, newTrades, cumMap);
     LIVE_STATE = {{
       status: st.status, direction: st.direction, entry_price: st.entry_price,
       stop_loss_price: st.stop_loss_price, take_profit_price: st.take_profit_price, trigger_price: st.trigger_price,
