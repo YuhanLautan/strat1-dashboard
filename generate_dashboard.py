@@ -242,11 +242,18 @@ def build_html(data):
   .live-meta {{ color: var(--muted); font-size: 0.78rem; }}
   .live-distances {{ display: flex; gap: 22px; flex-wrap: wrap; margin-top: 12px; font-size: 0.85rem; }}
   .live-distances span.lbl {{ display: block; }}
-  .gate-timeline {{ display: flex; gap: 3px; margin: 14px 0; flex-wrap: wrap; }}
-  .gate-day {{ width: 16px; height: 28px; border-radius: 3px; background: var(--panel2); border: 1px solid var(--border); cursor: default; }}
+  .gate-card {{ padding: 14px 18px; }}
+  .gate-card h2 {{ font-size: 0.9rem; margin-bottom: 8px; }}
+  .gate-card .manual-note {{ padding: 7px 10px; font-size: 0.78rem; }}
+  .gate-timeline {{ display: flex; gap: 2px; margin: 8px 0; flex-wrap: wrap; }}
+  .gate-day {{ width: 9px; height: 16px; border-radius: 2px; background: var(--panel2); border: 1px solid var(--border); cursor: default; }}
   .gate-day.open {{ background: var(--up); border-color: var(--up); }}
   .gate-day.closed {{ background: var(--down); border-color: var(--down); opacity: 0.75; }}
   .gate-day.unknown {{ background: var(--panel2); }}
+  .gate-table-scroll {{ max-height: 220px; overflow-y: auto; }}
+  .gate-card table {{ font-size: 0.78rem; }}
+  .gate-card th, .gate-card td {{ padding: 5px 8px; }}
+  .gate-card thead th {{ position: sticky; top: 0; background: var(--panel); }}
   td.pass {{ color: var(--up); }}
   td.fail {{ color: var(--down); }}
 </style>
@@ -287,11 +294,11 @@ def build_html(data):
     </div>
   </div>
 
-  <div class="card">
+  <div class="card gate-card">
     <h2>Consolidation gate <span id="gate-live-tag" class="mini-badge" style="margin-left:8px;">computing…</span></h2>
     <div id="gate-current"><p class="manual-note">Loading gate history…</p></div>
     <div id="gate-timeline" class="gate-timeline"></div>
-    <div class="table-scroll">
+    <div class="table-scroll gate-table-scroll">
     <table>
       <thead><tr>
         <th>Date (UTC)</th><th>Daily high</th><th>Daily low</th>
@@ -563,6 +570,22 @@ function renderGateHistory(days, rawHit, flag, rangePct, gateMap) {{
       No new entries regardless of RSI/MA until it reopens — ${{needText}}. Existing open positions are unaffected.</p>`;
   }}
 
+  // For each effective (shifted) day, find the date its current OPEN/CLOSED
+  // streak actually began -- i.e. when it last flipped -- so the table can
+  // say "OPEN since 2026-07-15" instead of the less useful "(from <next
+  // calendar day>)", which was just an artifact of the one-day shift math.
+  const runStartByEffDate = new Map();
+  {{
+    let runStart = null, prevVal = null;
+    for (let i = 0; i < n; i++) {{
+      const eff = addDaysStr(days[i].date, 1);
+      const val = flag[i];
+      if (prevVal === null || val !== prevVal) runStart = eff;
+      runStartByEffDate.set(eff, runStart);
+      prevVal = val;
+    }}
+  }}
+
   const timelineEl = document.getElementById("gate-timeline");
   const recent = [];
   for (let i = Math.max(0, n - 30); i < n; i++) {{
@@ -580,13 +603,14 @@ function renderGateHistory(days, rawHit, flag, rangePct, gateMap) {{
     const eff = addDaysStr(days[i].date, 1);
     const open = gateMap.get(eff) || false;
     const rp = rangePct[i];
+    const since = runStartByEffDate.get(eff);
     rows.push(`<tr>
       <td>${{days[i].date}}</td>
       <td>${{fmtUsd(days[i].high)}}</td>
       <td>${{fmtUsd(days[i].low)}}</td>
       <td>${{rp === null ? "—" : rp.toFixed(2) + "%"}}</td>
       <td class="${{rp === null ? "" : (rawHit[i] ? "pass" : "fail")}}">${{rp === null ? "warming up" : (rawHit[i] ? "PASS" : "FAIL")}}</td>
-      <td class="${{open ? "up" : "down"}}">${{open ? "OPEN" : "CLOSED"}} (from ${{eff}})</td>
+      <td class="${{open ? "up" : "down"}}">${{open ? "OPEN" : "CLOSED"}} (since ${{since}})</td>
     </tr>`);
   }}
   tbody.innerHTML = rows.join("");
