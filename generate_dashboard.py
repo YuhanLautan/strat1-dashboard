@@ -10,6 +10,7 @@ Run from the project root, after export_status.py:
 
 import json
 import os
+import pandas as pd
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 STATUS_PATH = os.path.join(HERE, "status.json")
@@ -46,6 +47,15 @@ def fmt_pct(x, decimals=2):
     return f"{sign}{x:,.{decimals}f}%"
 
 
+def fmt_time_my(ts):
+    """Malaysia has no DST, so a fixed UTC+8 offset is exact year-round --
+    no zoneinfo/tz-database dependency needed."""
+    if ts is None:
+        return None
+    dt = pd.to_datetime(ts, utc=True) + pd.Timedelta(hours=8)
+    return dt.strftime("%Y-%m-%d %H:%M") + " MYT"
+
+
 def build_html(data):
     cfg = data["config"]
     live = data["live_state"]
@@ -70,7 +80,7 @@ def build_html(data):
         live_body = f"""
         <div class="status-grid">
           <div><span class="lbl">Direction</span><span class="val {'up' if direction=='LONG' else 'down'}">{direction}</span></div>
-          <div><span class="lbl">Entry time</span><span class="val">{live['entry_time']}</span></div>
+          <div><span class="lbl">Entry time</span><span class="val">{fmt_time_my(live['entry_time'])}</span></div>
           <div><span class="lbl">Entry price</span><span class="val">${fmt_num(live['entry_price'])}</span></div>
           <div><span class="lbl">Stop loss</span><span class="val down">${fmt_num(live['stop_loss_price'])}</span></div>
           <div><span class="lbl">Take profit</span><span class="val up">${fmt_num(live['take_profit_price'])}</span></div>
@@ -88,7 +98,7 @@ def build_html(data):
         live_body = f"""
         <div class="status-grid">
           <div><span class="lbl">Direction</span><span class="val {'up' if direction=='LONG' else 'down'}">{direction}</span></div>
-          <div><span class="lbl">Signal candle</span><span class="val">{live['signal_time']}</span></div>
+          <div><span class="lbl">Signal candle</span><span class="val">{fmt_time_my(live['signal_time'])}</span></div>
           <div><span class="lbl">Trigger price</span><span class="val">${fmt_num(live['trigger_price'])}</span></div>
           <div><span class="lbl">Last known price</span><span class="val">${fmt_num(live['last_close'])}</span></div>
         </div>
@@ -140,8 +150,8 @@ def build_html(data):
         reason_class = "up" if reason == "TAKE_PROFIT" else ("down" if reason == "STOP_LOSS" else "")
         rows_trades += f"""
         <tr>
-          <td>{t['entry_time']}</td>
-          <td>{t['exit_time']}</td>
+          <td>{fmt_time_my(t['entry_time'])}</td>
+          <td>{fmt_time_my(t['exit_time'])}</td>
           <td class="{dir_class}">{d}</td>
           <td class="{reason_class}">{reason.replace('_',' ')}</td>
           <td>${fmt_num(t['entry_price'])}</td>
@@ -240,7 +250,7 @@ def build_html(data):
   <div class="subtitle">5x leverage · 10% daily-loss limit · 3-day pause on breach — the adopted config</div>
 
   <div id="staleness-banner" class="banner">
-    ⚠ Showing a <b>backtest snapshot</b> from <b>{live['as_of']}</b> while the live engine computes (or as a
+    ⚠ Showing a <b>backtest snapshot</b> from <b>{fmt_time_my(live['as_of'])}</b> while the live engine computes (or as a
     fallback if it fails to reach Binance). Re-run <code>export_status.py</code> against a refreshed
     <code>BTCUSDT_15m_history.csv</code> any time to move this checkpoint forward.
   </div>
@@ -315,7 +325,8 @@ def build_html(data):
     ({cfg['STOP_LOSS_PCT']}% / {cfg['TAKE_PROFIT_PCT']}%), whichever hits first. A daily-loss breach of
     {cfg['DAILY_LOSS_LIMIT_PCT']}% (margin-relative) pauses new entries for {cfg['DAILY_LOSS_PAUSE_DAYS']} days.
     See <code>Strat 1/README.md</code> for full derivation, validation, and caveats.
-    Generated from data as of {data['generated_at_data_timestamp']}.
+    Generated from data as of {fmt_time_my(data['generated_at_data_timestamp'])}. All times on this page are
+    Malaysia time (UTC+8).
   </footer>
 </div>
 
@@ -337,6 +348,25 @@ function addDaysStr(ds, n) {{
   const d = new Date(ds + "T00:00:00Z");
   d.setUTCDate(d.getUTCDate() + n);
   return d.toISOString().slice(0, 10);
+}}
+
+// Malaysia has no DST, so UTC+8 is exact year-round -- shown explicitly
+// rather than the viewer's own device timezone, since a manual-trade
+// reference is only useful if the times mean the same thing to everyone
+// reading it.
+const MY_OFFSET_MS = 8 * 3600 * 1000;
+function fmtTimeMY(isoOrDate) {{
+  if (!isoOrDate) return "";
+  const d = new Date(new Date(isoOrDate).getTime() + MY_OFFSET_MS);
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${{d.getUTCFullYear()}}-${{pad(d.getUTCMonth() + 1)}}-${{pad(d.getUTCDate())}} `
+       + `${{pad(d.getUTCHours())}}:${{pad(d.getUTCMinutes())}} MYT`;
+}}
+function nowMY() {{ return fmtTimeMY(new Date()); }}
+function nowTimeOnlyMY() {{
+  const d = new Date(Date.now() + MY_OFFSET_MS);
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${{pad(d.getUTCHours())}}:${{pad(d.getUTCMinutes())}}:${{pad(d.getUTCSeconds())}} MYT`;
 }}
 
 function renderDistances(price) {{
@@ -403,7 +433,7 @@ async function refreshPrice() {{
     }}
     prevPrice = price;
     dot.className = "live-dot ok";
-    metaEl.textContent = "Live from Binance · updated " + new Date().toLocaleTimeString();
+    metaEl.textContent = "Live from Binance · updated " + nowTimeOnlyMY();
     renderDistances(price);
     renderUnrealizedPnl(price);
   }} catch (e) {{
@@ -501,7 +531,7 @@ function renderStatusCard(st) {{
     body = `
       <div class="status-grid">
         <div><span class="lbl">Direction</span><span class="val ${{dirClass}}">${{st.direction}}</span></div>
-        <div><span class="lbl">Entry time</span><span class="val">${{st.entry_time}}</span></div>
+        <div><span class="lbl">Entry time</span><span class="val">${{fmtTimeMY(st.entry_time)}}</span></div>
         <div><span class="lbl">Entry price</span><span class="val">${{fmtUsd(st.entry_price)}}</span></div>
         <div><span class="lbl">Stop loss</span><span class="val down">${{fmtUsd(st.stop_loss_price)}}</span></div>
         <div><span class="lbl">Take profit</span><span class="val up">${{fmtUsd(st.take_profit_price)}}</span></div>
@@ -514,7 +544,7 @@ function renderStatusCard(st) {{
     body = `
       <div class="status-grid">
         <div><span class="lbl">Direction</span><span class="val ${{dirClass}}">${{st.direction}}</span></div>
-        <div><span class="lbl">Signal candle</span><span class="val">${{st.signal_time}}</span></div>
+        <div><span class="lbl">Signal candle</span><span class="val">${{fmtTimeMY(st.signal_time)}}</span></div>
         <div><span class="lbl">Trigger price</span><span class="val">${{fmtUsd(st.trigger_price)}}</span></div>
       </div>
       <p class="manual-note">Manual trade reference: a resting limit-style entry is waiting to be touched at
@@ -570,7 +600,7 @@ function renderTrackRecord(tradesOldestFirst) {{
     <div><span class="lbl">Trades (closed)</span><span class="val">${{s.num_trades}}</span></div>
     <div><span class="lbl">Win rate</span><span class="val">${{s.win_rate_pct.toFixed(1)}}%</span></div>`;
   const tag = document.getElementById("track-live-tag");
-  tag.textContent = "live · computed " + new Date().toLocaleTimeString();
+  tag.textContent = "live · computed " + nowTimeOnlyMY();
   tag.style.color = "var(--up)";
 }}
 
@@ -587,8 +617,8 @@ function renderTradesTable(newTrades) {{
     const margin = t.live ? "—" : fmtUsd(t.margin_usd);
     const bal = t.live ? "—" : fmtUsd(t.balance_after_usd);
     return `<tr>
-      <td>${{t.entry_time}}</td>
-      <td>${{t.exit_time}}</td>
+      <td>${{fmtTimeMY(t.entry_time)}}</td>
+      <td>${{fmtTimeMY(t.exit_time)}}</td>
       <td class="${{dirClass}}">${{t.direction}}</td>
       <td class="${{reasonClass}}">${{t.reason.replace(/_/g, " ")}}</td>
       <td>${{fmtUsd(t.entry_price)}}</td>
@@ -710,7 +740,7 @@ async function runLiveEngine() {{
       stop_loss_price: st.stop_loss_price, take_profit_price: st.take_profit_price, trigger_price: st.trigger_price,
     }};
     document.getElementById("staleness-banner").style.display = "none";
-    const nowStr = new Date().toLocaleTimeString();
+    const nowStr = nowTimeOnlyMY();
     tag.textContent = "live · computed " + nowStr;
     tag.style.color = "var(--up)";
     const tradesTag = document.getElementById("trades-live-tag");
