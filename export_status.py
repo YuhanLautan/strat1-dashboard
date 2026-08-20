@@ -277,6 +277,7 @@ def main():
         "recent_summary": compute_window_summary(recent_trades, cfg),
         "live_state": r["live_state"],
         "last_20_trades": recent_trades,
+        "all_trades": r["trades"],
         "generated_at_data_timestamp": r["live_state"]["as_of"],
         "engine_checkpoint": {
             "as_of_time": r["live_state"]["as_of"],

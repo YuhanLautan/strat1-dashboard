@@ -131,6 +131,7 @@ def build_html(data):
 
     checkpoint_js_data = json.dumps(data["engine_checkpoint"])
     static_trades_js_data = json.dumps(trades)
+    all_static_trades_js_data = json.dumps(data["all_trades"])
     engine_cfg_js_data = json.dumps({
         "RSI_PERIOD": cfg["RSI_PERIOD"], "RSI_OVERSOLD": cfg["RSI_OVERSOLD"], "RSI_OVERBOUGHT": cfg["RSI_OVERBOUGHT"],
         "USE_MA_FILTER": cfg["USE_MA_FILTER"], "MA_PERIOD": cfg["MA_PERIOD"], "ALLOW_SHORTS": cfg.get("ALLOW_SHORTS", False),
@@ -365,6 +366,7 @@ def build_html(data):
 let LIVE_STATE = {live_price_js_data};
 const CHECKPOINT = {checkpoint_js_data};
 const STATIC_TRADES = {static_trades_js_data};
+const ALL_STATIC_TRADES = {all_static_trades_js_data};
 const CFG = {engine_cfg_js_data};
 let prevPrice = null;
 
@@ -579,7 +581,20 @@ function computeDailyFlags(days, lookback, thresholdPct, persistence) {{
   return {{ rawHit, flag, rangePct }};
 }}
 
-function renderGateHistory(days, rawHit, flag, rangePct, gateMap) {{
+function tradesInRange(startMs, endMs, newTrades) {{
+  // ALL_STATIC_TRADES covers the full 9-year backtest (embedded once at
+  // export time); newTrades is whatever the live engine has closed since
+  // the checkpoint. Together they cover every period, however old.
+  const inRange = (t) => {{
+    const tMs = new Date(t.entry_time.replace(" ", "T")).getTime();
+    return tMs >= startMs && tMs < endMs;
+  }};
+  const fromStatic = ALL_STATIC_TRADES.filter(inRange).map(t => ({{...t, live: false}}));
+  const fromLive = newTrades.filter(inRange).map(t => ({{...t, live: true}}));
+  return fromStatic.concat(fromLive).sort((a, b) => new Date(a.entry_time.replace(" ", "T")) - new Date(b.entry_time.replace(" ", "T")));
+}}
+
+function renderGateHistory(days, rawHit, flag, rangePct, gateMap, newTrades) {{
   const n = days.length;
   const todayEffective = dateStr(Date.now());
   const currentGateOpen = gateMap.get(todayEffective) || false;
@@ -655,13 +670,16 @@ function renderGateHistory(days, rawHit, flag, rangePct, gateMap) {{
         ? ` · closed when range expanded to ${{p.closedAtDay.rangePct.toFixed(2)}}% on ${{p.closedAtDay.sourceDate}}`
         : "";
 
-      const dayRows = p.days.map(d => `<tr>
-          <td>${{d.sourceDate}}</td>
-          <td>${{fmtUsd(d.high)}}</td>
-          <td>${{fmtUsd(d.low)}}</td>
-          <td>${{d.rangePct === null ? "—" : d.rangePct.toFixed(2) + "%"}}</td>
-          <td class="${{d.rawHit ? "pass" : "fail"}}">${{d.rawHit ? "PASS" : "FAIL"}}</td>
-        </tr>`).join("");
+      const startMs = new Date(p.days[0].effDate + "T00:00:00Z").getTime();
+      const endMs = p.ongoing ? Date.now() : new Date(p.days[p.days.length - 1].effDate + "T00:00:00Z").getTime() + 86400000;
+      const periodTrades = tradesInRange(startMs, endMs, newTrades);
+      const tradesInfo = periodTrades.length
+        ? `${{periodTrades.length}} trade${{periodTrades.length > 1 ? "s" : ""}}, ${{periodTrades.filter(t => t.reason === "TAKE_PROFIT").length}} TP / ${{periodTrades.filter(t => t.reason === "STOP_LOSS").length}} SL`
+        : "no trades fired during this period";
+
+      const tradeRows = periodTrades.length
+        ? periodTrades.map(tradeRowHtml).join("")
+        : `<tr><td colspan="8" style="color:var(--muted);">No trades fired while this gate was open (RSI/MA conditions never lined up).</td></tr>`;
 
       return `<details class="gate-period">
         <summary>
@@ -669,12 +687,16 @@ function renderGateHistory(days, rawHit, flag, rangePct, gateMap) {{
           <span class="mini-badge">${{statusLabel}}</span>
           <span class="mini-badge">BTC ${{fmtUsd(lo)}}–${{fmtUsd(hi)}} (${{priceChangePct >= 0 ? "+" : ""}}${{priceChangePct.toFixed(1)}}%)</span>
           <span class="mini-badge">tightest ${{tightest === Infinity ? "—" : tightest.toFixed(2) + "%"}}</span>
+          <span class="mini-badge">${{tradesInfo}}</span>
         </summary>
         <p class="manual-note" style="margin:8px 0;">${{p.ongoing ? "Still open as of the latest daily close" : "Closed"}}${{closeInfo}}.</p>
         <div class="table-scroll gate-table-scroll">
         <table>
-          <thead><tr><th>Date (UTC)</th><th>Daily high</th><th>Daily low</th><th>14d window range</th><th>Raw hit (≤${{CFG.CAUSAL_DETECTOR_THRESHOLD_PCT}}%)</th></tr></thead>
-          <tbody>${{dayRows}}</tbody>
+          <thead><tr>
+            <th>Entry time</th><th>Exit time</th><th>Dir</th><th>Exit reason</th>
+            <th>Entry px</th><th>Exit px</th><th>Margin</th><th>Balance after</th>
+          </tr></thead>
+          <tbody>${{tradeRows}}</tbody>
         </table>
         </div>
       </details>`;
@@ -776,19 +798,12 @@ function renderTrackRecord(tradesOldestFirst) {{
   tag.style.color = "var(--up)";
 }}
 
-function renderTradesTable(newTrades) {{
-  // newTrades (live-computed, no $ balance tracked) + STATIC_TRADES (from the
-  // backtest checkpoint, which do have $ balance) -- newest first, capped at 20.
-  const merged = newTrades.slice().reverse().map(t => ({{...t, live: true}}))
-    .concat(STATIC_TRADES.slice().reverse().map(t => ({{...t, live: false}})))
-    .slice(0, 20);
-  renderTrackRecord(merged.slice().reverse());
-  const rows = merged.map(t => {{
-    const dirClass = t.direction === "LONG" ? "up" : "down";
-    const reasonClass = t.reason === "TAKE_PROFIT" ? "up" : (t.reason === "STOP_LOSS" ? "down" : "");
-    const margin = t.live ? "—" : fmtUsd(t.margin_usd);
-    const bal = t.live ? "—" : fmtUsd(t.balance_after_usd);
-    return `<tr>
+function tradeRowHtml(t) {{
+  const dirClass = t.direction === "LONG" ? "up" : "down";
+  const reasonClass = t.reason === "TAKE_PROFIT" ? "up" : (t.reason === "STOP_LOSS" ? "down" : "");
+  const margin = t.live ? "—" : fmtUsd(t.margin_usd);
+  const bal = t.live ? "—" : fmtUsd(t.balance_after_usd);
+  return `<tr>
       <td>${{fmtTimeMY(t.entry_time)}}</td>
       <td>${{fmtTimeMY(t.exit_time)}}</td>
       <td class="${{dirClass}}">${{t.direction}}</td>
@@ -798,8 +813,16 @@ function renderTradesTable(newTrades) {{
       <td>${{margin}}</td>
       <td>${{bal}}</td>
     </tr>`;
-  }}).join("");
-  document.getElementById("trades-tbody").innerHTML = rows;
+}}
+
+function renderTradesTable(newTrades) {{
+  // newTrades (live-computed, no $ balance tracked) + STATIC_TRADES (from the
+  // backtest checkpoint, which do have $ balance) -- newest first, capped at 20.
+  const merged = newTrades.slice().reverse().map(t => ({{...t, live: true}}))
+    .concat(STATIC_TRADES.slice().reverse().map(t => ({{...t, live: false}})))
+    .slice(0, 20);
+  renderTrackRecord(merged.slice().reverse());
+  document.getElementById("trades-tbody").innerHTML = merged.map(tradeRowHtml).join("");
 }}
 
 async function runLiveEngine() {{
@@ -822,7 +845,6 @@ async function runLiveEngine() {{
     const {{rawHit, flag: dayFlags, rangePct}} = computeDailyFlags(days, CFG.CAUSAL_DETECTOR_LOOKBACK_DAYS, CFG.CAUSAL_DETECTOR_THRESHOLD_PCT, CFG.CAUSAL_DETECTOR_PERSISTENCE_DAYS);
     const gateMap = new Map();
     for (let i = 0; i < days.length; i++) gateMap.set(addDaysStr(days[i].date, 1), dayFlags[i]);
-    renderGateHistory(days, rawHit, dayFlags, rangePct, gateMap);
 
     let hasPosition = CHECKPOINT.has_position;
     let direction = CHECKPOINT.direction === "LONG" ? 1 : (CHECKPOINT.direction === "SHORT" ? -1 : null);
@@ -906,6 +928,7 @@ async function runLiveEngine() {{
 
     renderStatusCard(st);
     renderTradesTable(newTrades);
+    renderGateHistory(days, rawHit, dayFlags, rangePct, gateMap, newTrades);
     LIVE_STATE = {{
       status: st.status, direction: st.direction, entry_price: st.entry_price,
       stop_loss_price: st.stop_loss_price, take_profit_price: st.take_profit_price, trigger_price: st.trigger_price,
