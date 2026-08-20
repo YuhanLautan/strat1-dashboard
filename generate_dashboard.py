@@ -47,6 +47,16 @@ def fmt_pct(x, decimals=2):
     return f"{sign}{x:,.{decimals}f}%"
 
 
+def trade_pnl_pct(t, leverage):
+    """Single-trade % gained (not compounded), net of entry+exit fees,
+    at the given leverage. leverage=1 gives the unleveraged/spot figure."""
+    maker_fee, taker_fee = 0.02 / 100, 0.05 / 100
+    direction = 1 if t["direction"] == "LONG" else -1
+    move_pct = (t["exit_price"] - t["entry_price"]) / t["entry_price"] * direction
+    exit_fee = maker_fee if t["reason"] == "TAKE_PROFIT" else taker_fee
+    return (move_pct - maker_fee - exit_fee) * leverage * 100
+
+
 def fmt_time_my(ts):
     """Malaysia has no DST, so a fixed UTC+8 offset is exact year-round --
     no zoneinfo/tz-database dependency needed."""
@@ -146,9 +156,12 @@ def build_html(data):
     for t in reversed(trades):
         d = t["direction"]
         reason = t["reason"]
-        pnl = t["balance_after_usd"]
         dir_class = "up" if d == "LONG" else "down"
         reason_class = "up" if reason == "TAKE_PROFIT" else ("down" if reason == "STOP_LOSS" else "")
+        unlev_pct = trade_pnl_pct(t, 1)
+        lev_pct = trade_pnl_pct(t, cfg["LEVERAGE"])
+        unlev_class = "up" if unlev_pct >= 0 else "down"
+        lev_class = "up" if lev_pct >= 0 else "down"
         rows_trades += f"""
         <tr>
           <td>{fmt_time_my(t['entry_time'])}</td>
@@ -157,8 +170,8 @@ def build_html(data):
           <td class="{reason_class}">{reason.replace('_',' ')}</td>
           <td>${fmt_num(t['entry_price'])}</td>
           <td>${fmt_num(t['exit_price'])}</td>
-          <td>${fmt_num(t['margin_usd'], 0)}</td>
-          <td>${fmt_num(t['balance_after_usd'], 0)}</td>
+          <td class="{unlev_class}">{fmt_pct(unlev_pct)}</td>
+          <td class="{lev_class}">{fmt_pct(lev_pct)}</td>
         </tr>"""
 
     rows_params = ""
@@ -321,7 +334,7 @@ def build_html(data):
     <table>
       <thead><tr>
         <th>Entry time</th><th>Exit time</th><th>Dir</th><th>Exit reason</th>
-        <th>Entry px</th><th>Exit px</th><th>Margin</th><th>Balance after</th>
+        <th>Entry px</th><th>Exit px</th><th>% gained (1x)</th><th>% gained ({cfg['LEVERAGE']}x)</th>
       </tr></thead>
       <tbody id="trades-tbody">{rows_trades}
       </tbody>
@@ -707,7 +720,7 @@ function renderGateHistory(days, rawHit, flag, rangePct, gateMap, newTrades) {{
         <table>
           <thead><tr>
             <th>Entry time</th><th>Exit time</th><th>Dir</th><th>Exit reason</th>
-            <th>Entry px</th><th>Exit px</th><th>Margin</th><th>Balance after</th>
+            <th>Entry px</th><th>Exit px</th><th>% gained (1x)</th><th>% gained (${{CFG.LEVERAGE}}x)</th>
           </tr></thead>
           <tbody>${{tradeRows}}</tbody>
         </table>
@@ -814,11 +827,22 @@ function renderTrackRecord(tradesOldestFirst) {{
   tag.style.color = "var(--up)";
 }}
 
+function tradePnlPct(t, leverage) {{
+  // Single-trade % gained (not compounded), net of entry+exit fees.
+  // leverage=1 gives the unleveraged/spot figure.
+  const dir = t.direction === "LONG" ? 1 : -1;
+  const movePct = (t.exit_price - t.entry_price) / t.entry_price * dir;
+  const makerFee = 0.02 / 100, takerFee = 0.05 / 100;
+  const exitFee = t.reason === "TAKE_PROFIT" ? makerFee : takerFee;
+  return (movePct - makerFee - exitFee) * leverage * 100;
+}}
+
 function tradeRowHtml(t) {{
   const dirClass = t.direction === "LONG" ? "up" : "down";
   const reasonClass = t.reason === "TAKE_PROFIT" ? "up" : (t.reason === "STOP_LOSS" ? "down" : "");
-  const margin = t.live ? "—" : fmtUsd(t.margin_usd);
-  const bal = t.live ? "—" : fmtUsd(t.balance_after_usd);
+  const unlevPct = tradePnlPct(t, 1);
+  const levPct = tradePnlPct(t, CFG.LEVERAGE);
+  const fmtP = (x) => (x >= 0 ? "+" : "") + x.toFixed(2) + "%";
   return `<tr>
       <td>${{fmtTimeMY(t.entry_time)}}</td>
       <td>${{fmtTimeMY(t.exit_time)}}</td>
@@ -826,8 +850,8 @@ function tradeRowHtml(t) {{
       <td class="${{reasonClass}}">${{t.reason.replace(/_/g, " ")}}</td>
       <td>${{fmtUsd(t.entry_price)}}</td>
       <td>${{fmtUsd(t.exit_price)}}</td>
-      <td>${{margin}}</td>
-      <td>${{bal}}</td>
+      <td class="${{unlevPct >= 0 ? "up" : "down"}}">${{fmtP(unlevPct)}}</td>
+      <td class="${{levPct >= 0 ? "up" : "down"}}">${{fmtP(levPct)}}</td>
     </tr>`;
 }}
 
