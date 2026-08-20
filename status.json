@@ -28,6 +28,13 @@
     "num_trades": 458,
     "win_rate_pct": 55.021834061135365
   },
+  "full_history_summary": {
+    "return_pct_1x": 215.25738126094404,
+    "return_pct_leveraged": 5941.74996058455,
+    "max_drawdown_pct": -56.561515846161704,
+    "num_trades": 458,
+    "win_rate_pct": 55.021834061135365
+  },
   "recent_summary": {
     "return_pct": -29.506990408301448,
     "max_drawdown_pct": -36.962435903899376,

@@ -192,17 +192,17 @@ def simulate_with_live_state(prepared, cfg, leverage, daily_limit_pct, pause_day
     return result
 
 
-def compute_window_summary(trades, cfg):
+def compute_window_summary(trades, cfg, leverage=None):
     """Return/max-drawdown/win-rate computed fresh from just this slice of
-    trades (a hypothetical $10k restart at the first trade in the window),
-    not the full 9-year backtest -- so the "track record" card matches
-    exactly what's visible in the trades table above it. Per-trade
-    compounding uses leverage-on-margin math (mirrors simulate()'s
+    trades (a hypothetical $10k restart at the first trade in the window).
+    Per-trade compounding uses leverage-on-margin math (mirrors simulate()'s
     proceeds = margin + gross_pnl - exit_fee, expressed as a fraction of
     margin so it doesn't need the trade's actual dollar margin/notional --
     works the same whether a trade came from the static backtest or the
-    live client-side engine, which doesn't track dollar balance at all)."""
-    leverage = cfg["LEVERAGE"]
+    live client-side engine, which doesn't track dollar balance at all).
+    leverage defaults to cfg's configured leverage; pass 1 for the
+    unleveraged/spot equivalent of the same trade sequence."""
+    leverage = cfg["LEVERAGE"] if leverage is None else leverage
     maker_fee = MAKER_FEE_PCT / 100.0
     taker_fee = TAKER_FEE_PCT / 100.0
 
@@ -264,6 +264,8 @@ def main():
     ]
 
     recent_trades = r["trades"][-20:]
+    full_summary_1x = compute_window_summary(r["trades"], cfg, leverage=1)
+    full_summary_lev = compute_window_summary(r["trades"], cfg, leverage=cfg["LEVERAGE"])
 
     out = {
         "config": cfg,
@@ -273,6 +275,15 @@ def main():
             "max_drawdown_pct": r["max_drawdown_pct"],
             "num_trades": r["num_trades"],
             "win_rate_pct": r["win_rate_pct"],
+        }, # from the real dollar-tracking engine -- kept for reference, but
+           # full_history_summary below (same compute_window_summary formula
+           # used everywhere else on the dashboard) is what's actually shown
+        "full_history_summary": {
+            "return_pct_1x": full_summary_1x["return_pct"],
+            "return_pct_leveraged": full_summary_lev["return_pct"],
+            "max_drawdown_pct": full_summary_lev["max_drawdown_pct"],
+            "num_trades": full_summary_lev["num_trades"],
+            "win_rate_pct": full_summary_lev["win_rate_pct"],
         },
         "recent_summary": compute_window_summary(recent_trades, cfg),
         "live_state": r["live_state"],

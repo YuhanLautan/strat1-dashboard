@@ -69,7 +69,7 @@ def fmt_time_my(ts):
 def build_html(data):
     cfg = data["config"]
     live = data["live_state"]
-    summary = data["recent_summary"]
+    summary = data["full_history_summary"]
     trades = data["last_20_trades"]
 
     status = live["status"]
@@ -343,17 +343,18 @@ def build_html(data):
   </div>
 
   <div class="card">
-    <h2>Track record — last 20 closed trades <span id="track-live-tag" class="mini-badge" style="margin-left:8px;">computing…</span></h2>
+    <h2>Backtest track record — full history <span id="track-live-tag" class="mini-badge" style="margin-left:8px;">computing…</span></h2>
     <div id="track-summary" class="summary-row">
-      <div><span class="lbl">Return</span><span class="val {'up' if summary['return_pct']>=0 else 'down'}">{fmt_pct(summary['return_pct'])}</span></div>
-      <div><span class="lbl">Max drawdown</span><span class="val down">{fmt_pct(summary['max_drawdown_pct'])}</span></div>
+      <div><span class="lbl">Return (1x, unleveraged)</span><span class="val {'up' if summary['return_pct_1x']>=0 else 'down'}">{fmt_pct(summary['return_pct_1x'])}</span></div>
+      <div><span class="lbl">Return ({cfg['LEVERAGE']}x leveraged)</span><span class="val {'up' if summary['return_pct_leveraged']>=0 else 'down'}">{fmt_pct(summary['return_pct_leveraged'])}</span></div>
+      <div><span class="lbl">Max drawdown ({cfg['LEVERAGE']}x)</span><span class="val down">{fmt_pct(summary['max_drawdown_pct'])}</span></div>
       <div><span class="lbl">Trades (closed)</span><span class="val">{summary['num_trades']}</span></div>
       <div><span class="lbl">Win rate</span><span class="val">{fmt_num(summary['win_rate_pct'],1)}%</span></div>
     </div>
-    <p class="manual-note">Compounds a hypothetical $10k restart at the first of these 20 trades, {cfg['LEVERAGE']}x
-    leverage / 100% position size each trade — matches the trades table above exactly, not the full 9-year
-    backtest. Dollar amounts aren't shown here since they'd depend on real position sizing; the %
-    figures are what matter for gauging recent performance.</p>
+    <p class="manual-note">Compounds a hypothetical $10k restart at the very first trade in the ~9-year backtest,
+    100% position size each trade, net of entry+exit fees — kept current with any trades the live engine has
+    closed since this snapshot. Dollar amounts aren't shown since they'd depend on real position sizing at that
+    scale; the % figures are what matter.</p>
   </div>
 
   <div class="card">
@@ -815,13 +816,20 @@ function computeWindowSummary(tradesOldestFirst, leverage) {{
   }};
 }}
 
-function renderTrackRecord(tradesOldestFirst) {{
-  const s = computeWindowSummary(tradesOldestFirst);
+function renderTrackRecord(newTrades) {{
+  // Full 9-year backtest history (ALL_STATIC_TRADES) plus whatever the live
+  // engine has closed since the checkpoint -- not just the last 20 shown in
+  // the table below, which is a different (smaller) view of the same data.
+  const full = ALL_STATIC_TRADES.concat(newTrades)
+    .sort((a, b) => new Date(a.entry_time.replace(" ", "T")) - new Date(b.entry_time.replace(" ", "T")));
+  const unlev = computeWindowSummary(full, 1);
+  const lev = computeWindowSummary(full, CFG.LEVERAGE);
   document.getElementById("track-summary").innerHTML = `
-    <div><span class="lbl">Return</span><span class="val ${{s.return_pct >= 0 ? 'up' : 'down'}}">${{fmtPct(s.return_pct)}}</span></div>
-    <div><span class="lbl">Max drawdown</span><span class="val down">${{fmtPct(s.max_drawdown_pct)}}</span></div>
-    <div><span class="lbl">Trades (closed)</span><span class="val">${{s.num_trades}}</span></div>
-    <div><span class="lbl">Win rate</span><span class="val">${{s.win_rate_pct.toFixed(1)}}%</span></div>`;
+    <div><span class="lbl">Return (1x, unleveraged)</span><span class="val ${{unlev.return_pct >= 0 ? 'up' : 'down'}}">${{fmtPct(unlev.return_pct)}}</span></div>
+    <div><span class="lbl">Return (${{CFG.LEVERAGE}}x leveraged)</span><span class="val ${{lev.return_pct >= 0 ? 'up' : 'down'}}">${{fmtPct(lev.return_pct)}}</span></div>
+    <div><span class="lbl">Max drawdown (${{CFG.LEVERAGE}}x)</span><span class="val down">${{fmtPct(lev.max_drawdown_pct)}}</span></div>
+    <div><span class="lbl">Trades (closed)</span><span class="val">${{lev.num_trades}}</span></div>
+    <div><span class="lbl">Win rate</span><span class="val">${{lev.win_rate_pct.toFixed(1)}}%</span></div>`;
   const tag = document.getElementById("track-live-tag");
   tag.textContent = "live · computed " + nowTimeOnlyMY();
   tag.style.color = "var(--up)";
@@ -861,7 +869,7 @@ function renderTradesTable(newTrades) {{
   const merged = newTrades.slice().reverse().map(t => ({{...t, live: true}}))
     .concat(STATIC_TRADES.slice().reverse().map(t => ({{...t, live: false}})))
     .slice(0, 20);
-  renderTrackRecord(merged.slice().reverse());
+  renderTrackRecord(newTrades);
   document.getElementById("trades-tbody").innerHTML = merged.map(tradeRowHtml).join("");
 }}
 
