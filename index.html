@@ -668,6 +668,24 @@ function renderGateHistory(days, rawHit, flag, rangePct, gateMap, newTrades, cum
       ? `needs ${need} more consecutive day${need > 1 ? "s" : ""} with a ≤${CFG.CAUSAL_DETECTOR_THRESHOLD_PCT}% rolling ${CFG.CAUSAL_DETECTOR_LOOKBACK_DAYS}-day range before it reopens`
       : "should reopen at the next daily close if today stays tight";
 
+    // Rule 0: the 14-day lookback window itself -- how close the extreme
+    // high/low that's currently blowing out the range is to aging out of
+    // the trailing window. Whichever of the window's high-day or low-day
+    // is more RECENT is the one holding the range hostage (the older of
+    // the two rolls out first and stops mattering).
+    const lookback = CFG.CAUSAL_DETECTOR_LOOKBACK_DAYS;
+    const windowStart = Math.max(0, n - lookback);
+    let highIdx = windowStart, lowIdx = windowStart;
+    for (let i = windowStart; i < n; i++) {
+      if (days[i].high > days[highIdx].high) highIdx = i;
+      if (days[i].low < days[lowIdx].low) lowIdx = i;
+    }
+    const anchorIdx = Math.max(highIdx, lowIdx);
+    const daysSinceAnchor = (n - 1) - anchorIdx;
+    const anchorAgePct = Math.min(100, (daysSinceAnchor / lookback) * 100);
+    const anchorBarClass = daysSinceAnchor >= lookback - 1 ? "ready" : "notready";
+    const anchorWhich = anchorIdx === highIdx ? "high" : "low";
+
     // Rule 1: today's rolling range vs the threshold it needs to shrink under.
     const currentRangePct = rangePct[n - 1];
     const rangeReadyPct = currentRangePct === null ? 0 : Math.min(100, (CFG.CAUSAL_DETECTOR_THRESHOLD_PCT / currentRangePct) * 100);
@@ -681,6 +699,11 @@ function renderGateHistory(days, rawHit, flag, rangePct, gateMap, newTrades, cum
     currentEl.innerHTML = `<p class="manual-note">Gate is currently <b class="val down">CLOSED</b> as of ${todayEffective} (UTC).
       No new entries regardless of RSI/MA until it reopens — ${needText}. Existing open positions are unaffected.</p>
       <div class="gate-progress">
+        <div class="gate-progress-row">
+          <span class="gate-progress-label">Lookback window (${lookback}d)</span>
+          <div class="gate-progress-bar"><div class="gate-progress-fill ${anchorBarClass}" style="width:${anchorAgePct}%"></div></div>
+          <span class="gate-progress-val">day ${daysSinceAnchor + 1} of ${lookback} since the ${anchorWhich} on ${days[anchorIdx].date}</span>
+        </div>
         <div class="gate-progress-row">
           <span class="gate-progress-label">Rule 1 — range ≤${CFG.CAUSAL_DETECTOR_THRESHOLD_PCT}%</span>
           <div class="gate-progress-bar"><div class="gate-progress-fill ${rangeBarClass}" style="width:${rangeReadyPct}%"></div></div>
