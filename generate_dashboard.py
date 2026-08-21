@@ -296,6 +296,14 @@ def build_html(data):
   .gate-card th, .gate-card td {{ padding: 5px 8px; }}
   .gate-card thead th {{ position: sticky; top: 0; background: var(--panel); }}
   .gate-periods-label {{ font-size: 0.72rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.03em; margin: 10px 0 6px; }}
+  .gate-progress {{ margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }}
+  .gate-progress-row {{ display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }}
+  .gate-progress-label {{ font-size: 0.75rem; color: var(--muted); min-width: 130px; flex-shrink: 0; }}
+  .gate-progress-bar {{ flex: 1; min-width: 80px; height: 8px; background: var(--panel2); border: 1px solid var(--border); border-radius: 4px; overflow: hidden; }}
+  .gate-progress-fill {{ height: 100%; border-radius: 4px; transition: width 0.3s ease; }}
+  .gate-progress-fill.notready {{ background: var(--pending); }}
+  .gate-progress-fill.ready {{ background: var(--up); }}
+  .gate-progress-val {{ font-size: 0.75rem; color: var(--text); min-width: 150px; flex-shrink: 0; text-align: right; }}
   .gate-period {{ background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 6px; padding: 8px 10px; }}
   .gate-period summary {{
     cursor: pointer; display: flex; gap: 10px; flex-wrap: wrap; align-items: center;
@@ -655,8 +663,31 @@ function renderGateHistory(days, rawHit, flag, rangePct, gateMap, newTrades, cum
     const needText = need > 0
       ? `needs ${{need}} more consecutive day${{need > 1 ? "s" : ""}} with a ≤${{CFG.CAUSAL_DETECTOR_THRESHOLD_PCT}}% rolling ${{CFG.CAUSAL_DETECTOR_LOOKBACK_DAYS}}-day range before it reopens`
       : "should reopen at the next daily close if today stays tight";
+
+    // Rule 1: today's rolling range vs the threshold it needs to shrink under.
+    const currentRangePct = rangePct[n - 1];
+    const rangeReadyPct = currentRangePct === null ? 0 : Math.min(100, (CFG.CAUSAL_DETECTOR_THRESHOLD_PCT / currentRangePct) * 100);
+    const rangeBarClass = rangeReadyPct >= 100 ? "ready" : "notready";
+    const rangeLabel = currentRangePct === null ? "warming up" : `${{currentRangePct.toFixed(2)}}% (need ≤${{CFG.CAUSAL_DETECTOR_THRESHOLD_PCT}}%)`;
+
+    // Rule 2: consecutive tight days banked toward the persistence requirement.
+    const persistPct = Math.min(100, (currentRun / CFG.CAUSAL_DETECTOR_PERSISTENCE_DAYS) * 100);
+    const persistBarClass = persistPct >= 100 ? "ready" : "notready";
+
     currentEl.innerHTML = `<p class="manual-note">Gate is currently <b class="val down">CLOSED</b> as of ${{todayEffective}} (UTC).
-      No new entries regardless of RSI/MA until it reopens — ${{needText}}. Existing open positions are unaffected.</p>`;
+      No new entries regardless of RSI/MA until it reopens — ${{needText}}. Existing open positions are unaffected.</p>
+      <div class="gate-progress">
+        <div class="gate-progress-row">
+          <span class="gate-progress-label">Rule 1 — range ≤${{CFG.CAUSAL_DETECTOR_THRESHOLD_PCT}}%</span>
+          <div class="gate-progress-bar"><div class="gate-progress-fill ${{rangeBarClass}}" style="width:${{rangeReadyPct}}%"></div></div>
+          <span class="gate-progress-val">${{rangeLabel}}</span>
+        </div>
+        <div class="gate-progress-row">
+          <span class="gate-progress-label">Rule 2 — persistence</span>
+          <div class="gate-progress-bar"><div class="gate-progress-fill ${{persistBarClass}}" style="width:${{persistPct}}%"></div></div>
+          <span class="gate-progress-val">${{currentRun}} / ${{CFG.CAUSAL_DETECTOR_PERSISTENCE_DAYS}} consecutive days</span>
+        </div>
+      </div>`;
   }}
 
   const timelineEl = document.getElementById("gate-timeline");
