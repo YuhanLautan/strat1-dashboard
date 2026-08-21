@@ -87,6 +87,7 @@ def build_html(data):
     cfg = data["config"]
     live = data["live_state"]
     summary = data["full_history_summary"]
+    buy_hold = data["buy_hold"]
     trades = data["last_20_trades"]
 
     status = live["status"]
@@ -157,6 +158,7 @@ def build_html(data):
     })
 
     checkpoint_js_data = json.dumps(data["engine_checkpoint"])
+    buy_hold_js_data = json.dumps({"start_price": buy_hold["start_price"], "start_date": buy_hold["start_date"][:10]})
     static_trades_js_data = json.dumps(trades)
     all_static_trades_js_data = json.dumps(data["all_trades"])
     engine_cfg_js_data = json.dumps({
@@ -372,6 +374,7 @@ def build_html(data):
       <div><span class="lbl">Max drawdown ({cfg['LEVERAGE']}x)</span><span class="val down">{fmt_pct(summary['max_drawdown_pct'])}</span></div>
       <div><span class="lbl">Trades (closed)</span><span class="val">{summary['num_trades']}</span></div>
       <div><span class="lbl">Win rate</span><span class="val">{fmt_num(summary['win_rate_pct'],1)}%</span></div>
+      <div><span class="lbl">BTC buy &amp; hold since {buy_hold['start_date'][:10]}</span><span class="val {'up' if buy_hold['return_pct']>=0 else 'down'}">{fmt_pct(buy_hold['return_pct'])}</span></div>
     </div>
     <p class="manual-note">Compounds a hypothetical $10k restart at the very first trade in the ~9-year backtest,
     100% position size each trade, net of entry+exit fees — kept current with any trades the live engine has
@@ -404,6 +407,7 @@ def build_html(data):
 <script>
 let LIVE_STATE = {live_price_js_data};
 const CHECKPOINT = {checkpoint_js_data};
+const BUY_HOLD = {buy_hold_js_data};
 const STATIC_TRADES = {static_trades_js_data};
 const ALL_STATIC_TRADES = {all_static_trades_js_data};
 const CFG = {engine_cfg_js_data};
@@ -838,7 +842,7 @@ function computeWindowSummary(tradesOldestFirst, leverage) {{
   }};
 }}
 
-function renderTrackRecord(newTrades) {{
+function renderTrackRecord(newTrades, currentPrice) {{
   // Full 9-year backtest history (ALL_STATIC_TRADES) plus whatever the live
   // engine has closed since the checkpoint -- not just the last 20 shown in
   // the table below, which is a different (smaller) view of the same data.
@@ -846,12 +850,14 @@ function renderTrackRecord(newTrades) {{
     .sort((a, b) => new Date(a.entry_time.replace(" ", "T")) - new Date(b.entry_time.replace(" ", "T")));
   const unlev = computeWindowSummary(full, 1);
   const lev = computeWindowSummary(full, CFG.LEVERAGE);
+  const buyHoldPct = (currentPrice / BUY_HOLD.start_price - 1) * 100;
   document.getElementById("track-summary").innerHTML = `
     <div><span class="lbl">Return (1x, unleveraged)</span><span class="val ${{unlev.return_pct >= 0 ? 'up' : 'down'}}">${{fmtPct(unlev.return_pct)}}</span></div>
     <div><span class="lbl">Return (${{CFG.LEVERAGE}}x leveraged)</span><span class="val ${{lev.return_pct >= 0 ? 'up' : 'down'}}">${{fmtPct(lev.return_pct)}}</span></div>
     <div><span class="lbl">Max drawdown (${{CFG.LEVERAGE}}x)</span><span class="val down">${{fmtPct(lev.max_drawdown_pct)}}</span></div>
     <div><span class="lbl">Trades (closed)</span><span class="val">${{lev.num_trades}}</span></div>
-    <div><span class="lbl">Win rate</span><span class="val">${{lev.win_rate_pct.toFixed(1)}}%</span></div>`;
+    <div><span class="lbl">Win rate</span><span class="val">${{lev.win_rate_pct.toFixed(1)}}%</span></div>
+    <div><span class="lbl">BTC buy &amp; hold since ${{BUY_HOLD.start_date}}</span><span class="val ${{buyHoldPct >= 0 ? 'up' : 'down'}}">${{fmtPct(buyHoldPct)}}</span></div>`;
   const tag = document.getElementById("track-live-tag");
   tag.textContent = "live · computed " + nowTimeOnlyMY();
   tag.style.color = "var(--up)";
@@ -902,13 +908,13 @@ function tradeRowHtml(t, cumMap) {{
     </tr>`;
 }}
 
-function renderTradesTable(newTrades, cumMap) {{
+function renderTradesTable(newTrades, cumMap, currentPrice) {{
   // newTrades (live-computed, no $ balance tracked) + STATIC_TRADES (from the
   // backtest checkpoint, which do have $ balance) -- newest first, capped at 20.
   const merged = newTrades.slice().reverse().map(t => ({{...t, live: true}}))
     .concat(STATIC_TRADES.slice().reverse().map(t => ({{...t, live: false}})))
     .slice(0, 20);
-  renderTrackRecord(newTrades);
+  renderTrackRecord(newTrades, currentPrice);
   document.getElementById("trades-tbody").innerHTML = merged.map(t => tradeRowHtml(t, cumMap)).join("");
 }}
 
@@ -1013,9 +1019,11 @@ async function runLiveEngine() {{
       trigger_price: pendingTrigger, signal_time: signalTime,
     }};
 
+    const currentPrice = closedNew[closedNew.length - 1].close;
+
     renderStatusCard(st);
     const cumMap = buildCumulativeMap(newTrades);
-    renderTradesTable(newTrades, cumMap);
+    renderTradesTable(newTrades, cumMap, currentPrice);
     renderGateHistory(days, rawHit, dayFlags, rangePct, gateMap, newTrades, cumMap);
     LIVE_STATE = {{
       status: st.status, direction: st.direction, entry_price: st.entry_price,

@@ -267,6 +267,15 @@ def main():
     full_summary_1x = compute_window_summary(r["trades"], cfg, leverage=1)
     full_summary_lev = compute_window_summary(r["trades"], cfg, leverage=cfg["LEVERAGE"])
 
+    buy_hold_start_price = float(df["close"].iloc[0])
+    buy_hold_start_date = str(df["open_time"].iloc[0])
+    buy_hold = {
+        "start_price": buy_hold_start_price,
+        "start_date": buy_hold_start_date,
+        "current_price": r["live_state"]["last_close"],
+        "return_pct": (r["live_state"]["last_close"] / buy_hold_start_price - 1) * 100,
+    }
+
     out = {
         "config": cfg,
         "summary": {
@@ -286,6 +295,7 @@ def main():
             "win_rate_pct": full_summary_lev["win_rate_pct"],
         },
         "recent_summary": compute_window_summary(recent_trades, cfg),
+        "buy_hold": buy_hold,
         "live_state": r["live_state"],
         "last_20_trades": recent_trades,
         "all_trades": r["trades"],
