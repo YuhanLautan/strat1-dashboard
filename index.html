@@ -651,7 +651,7 @@ function tradesInRange(startMs, endMs, newTrades) {
   return fromStatic.concat(fromLive).sort((a, b) => new Date(a.entry_time.replace(" ", "T")) - new Date(b.entry_time.replace(" ", "T")));
 }
 
-function renderGateHistory(days, rawHit, flag, rangePct, gateMap, newTrades, cumMap) {
+function renderGateHistory(days, rawHit, flag, rangePct, gateMap, newTrades, cumMap, displayDays) {
   const n = days.length;
   const todayEffective = dateStr(Date.now());
   const currentGateOpen = gateMap.get(todayEffective) || false;
@@ -670,38 +670,51 @@ function renderGateHistory(days, rawHit, flag, rangePct, gateMap, newTrades, cum
       ? `needs ${need} more consecutive day${need > 1 ? "s" : ""} with a ≤${CFG.CAUSAL_DETECTOR_THRESHOLD_PCT}% rolling ${CFG.CAUSAL_DETECTOR_LOOKBACK_DAYS}-day range before it reopens`
       : "should reopen at the next daily close if today stays tight";
 
+    // Rule 0 and Rule 1 use `displayDays` -- days plus today's still-forming
+    // daily candle (live high/low/close) -- so these two previews move with
+    // the live price during the day. This is DISPLAY ONLY: the actual gate
+    // decision (currentGateOpen above, and the entry/pending logic elsewhere
+    // in the engine) never sees today's incomplete candle, since trading off
+    // an unclosed day's range would be exactly the lookahead this detector
+    // exists to avoid. Rule 2's persistence count also stays on closed days
+    // only (`rawHit`/`n`, not `dN`/`dRawHit`) -- a day only "banks" once it
+    // actually closes.
+    const dN = displayDays.length;
+    const {rawHit: dRawHit, rangePct: dRangePct} = computeDailyFlags(
+      displayDays, CFG.CAUSAL_DETECTOR_LOOKBACK_DAYS, CFG.CAUSAL_DETECTOR_THRESHOLD_PCT, CFG.CAUSAL_DETECTOR_PERSISTENCE_DAYS);
+
     // Rule 0: the 14-day lookback window itself -- how close the extreme
     // high/low that's currently blowing out the range is to aging out of
     // the trailing window. Whichever of the window's high-day or low-day
     // is more RECENT is the one holding the range hostage (the older of
     // the two rolls out first and stops mattering).
     const lookback = CFG.CAUSAL_DETECTOR_LOOKBACK_DAYS;
-    const windowStart = Math.max(0, n - lookback);
+    const windowStart = Math.max(0, dN - lookback);
     let highIdx = windowStart, lowIdx = windowStart;
-    for (let i = windowStart; i < n; i++) {
-      if (days[i].high > days[highIdx].high) highIdx = i;
-      if (days[i].low < days[lowIdx].low) lowIdx = i;
+    for (let i = windowStart; i < dN; i++) {
+      if (displayDays[i].high > displayDays[highIdx].high) highIdx = i;
+      if (displayDays[i].low < displayDays[lowIdx].low) lowIdx = i;
     }
     const anchorIdx = Math.max(highIdx, lowIdx);
-    const daysSinceAnchor = (n - 1) - anchorIdx;
+    const daysSinceAnchor = (dN - 1) - anchorIdx;
     const anchorAgePct = Math.min(100, (daysSinceAnchor / lookback) * 100);
     const anchorBarClass = daysSinceAnchor >= lookback - 1 ? "ready" : "notready";
     const anchorWhich = anchorIdx === highIdx ? "high" : "low";
-    const windowHigh = days[highIdx].high, windowLow = days[lowIdx].low;
+    const windowHigh = displayDays[highIdx].high, windowLow = displayDays[lowIdx].low;
     // the ceiling price would need to stay under to qualify (≤12% above today's window low)
     const qualifyingCeiling = windowLow * (1 + CFG.CAUSAL_DETECTOR_THRESHOLD_PCT / 100);
 
     // Price action of just the current streak (since the anchor extreme),
     // not the full 14-day lookback -- what's actually happened recently.
     let streakLow = Infinity, streakHigh = -Infinity;
-    for (let i = anchorIdx; i < n; i++) {
-      streakLow = Math.min(streakLow, days[i].low);
-      streakHigh = Math.max(streakHigh, days[i].high);
+    for (let i = anchorIdx; i < dN; i++) {
+      streakLow = Math.min(streakLow, displayDays[i].low);
+      streakHigh = Math.max(streakHigh, displayDays[i].high);
     }
     const streakPriceLabel = `${fmtUsd(streakLow)} – ${fmtUsd(streakHigh)}`;
 
-    // Rule 1: today's rolling range vs the threshold it needs to shrink under.
-    const currentRangePct = rangePct[n - 1];
+    // Rule 1: right-now rolling range (live price included) vs the threshold.
+    const currentRangePct = dRangePct[dN - 1];
     const rangeReadyPct = currentRangePct === null ? 0 : Math.min(100, (CFG.CAUSAL_DETECTOR_THRESHOLD_PCT / currentRangePct) * 100);
     const rangeBarClass = rangeReadyPct >= 100 ? "ready" : "notready";
     const rangeLabel = currentRangePct === null ? "warming up" : `${currentRangePct.toFixed(2)}% (need ≤${CFG.CAUSAL_DETECTOR_THRESHOLD_PCT}%)`;
@@ -715,7 +728,7 @@ function renderGateHistory(days, rawHit, flag, rangePct, gateMap, newTrades, cum
       No new entries regardless of RSI/MA until it reopens — ${needText}. Existing open positions are unaffected.</p>
       <div class="gate-progress">
         <div class="gate-progress-row">
-          <span class="gate-progress-label">Lookback window (${lookback}d)</span>
+          <span class="gate-progress-label">Lookback window (${lookback}d) · live</span>
           <div class="gate-progress-bar"><div class="gate-progress-fill ${anchorBarClass}" style="width:${anchorAgePct}%"></div></div>
           <span class="gate-progress-val">day ${daysSinceAnchor + 1} of ${lookback} since the ${anchorWhich} on ${days[anchorIdx].date}</span>
         </div>
@@ -724,7 +737,7 @@ function renderGateHistory(days, rawHit, flag, rangePct, gateMap, newTrades, cum
           <span class="gate-progress-subval">current streak: ${streakPriceLabel} (since ${days[anchorIdx].date}) · needs to stay under ${fmtUsd(qualifyingCeiling)} once it ages out</span>
         </div>
         <div class="gate-progress-row">
-          <span class="gate-progress-label">Rule 1 — range ≤${CFG.CAUSAL_DETECTOR_THRESHOLD_PCT}%</span>
+          <span class="gate-progress-label">Rule 1 — range ≤${CFG.CAUSAL_DETECTOR_THRESHOLD_PCT}% · live</span>
           <div class="gate-progress-bar"><div class="gate-progress-fill ${rangeBarClass}" style="width:${rangeReadyPct}%"></div></div>
           <span class="gate-progress-val">${rangeLabel}</span>
         </div>
@@ -733,7 +746,7 @@ function renderGateHistory(days, rawHit, flag, rangePct, gateMap, newTrades, cum
           <span class="gate-progress-subval">target: ${targetRangeLabel} (≤${CFG.CAUSAL_DETECTOR_THRESHOLD_PCT}% band off today's low)</span>
         </div>
         <div class="gate-progress-row">
-          <span class="gate-progress-label">Rule 2 — persistence</span>
+          <span class="gate-progress-label">Rule 2 — persistence · closed days only</span>
           <div class="gate-progress-bar"><div class="gate-progress-fill ${persistBarClass}" style="width:${persistPct}%"></div></div>
           <span class="gate-progress-val">${currentRun} / ${CFG.CAUSAL_DETECTOR_PERSISTENCE_DAYS} consecutive days</span>
         </div>
@@ -1020,6 +1033,23 @@ async function runLiveEngine() {
     const gateMap = new Map();
     for (let i = 0; i < days.length; i++) gateMap.set(addDaysStr(days[i].date, 1), dayFlags[i]);
 
+    // Display-only overlay: append today's still-forming daily candle (live
+    // high/low/close so far) so the gate card's numbers move with the live
+    // price during the day instead of only updating once at daily close.
+    // This is NEVER used for the actual entry/pending/gate logic above --
+    // trading off an incomplete day's range would be exactly the kind of
+    // lookahead this whole detector exists to avoid. gateMap/dayFlags (the
+    // real causal signal) stay built from `days` alone.
+    let displayDays = days;
+    try {
+      const todayCandle = await fetchJson("/api/v3/klines?symbol=BTCUSDT&interval=1d&limit=1");
+      const k = todayCandle[0];
+      const liveDate = dateStr(k[0]);
+      if (days.length && days[days.length - 1].date !== liveDate) {
+        displayDays = days.concat([{date: liveDate, high: parseFloat(k[2]), low: parseFloat(k[3]), close: parseFloat(k[4])}]);
+      }
+    } catch (e) { /* fall back to closed-only days for display if this fetch fails */ }
+
     let hasPosition = CHECKPOINT.has_position;
     let direction = CHECKPOINT.direction === "LONG" ? 1 : (CHECKPOINT.direction === "SHORT" ? -1 : null);
     let entryPrice = CHECKPOINT.entry_price;
@@ -1105,7 +1135,7 @@ async function runLiveEngine() {
     renderStatusCard(st);
     const cumMap = buildCumulativeMap(newTrades);
     renderTradesTable(newTrades, cumMap, currentPrice);
-    renderGateHistory(days, rawHit, dayFlags, rangePct, gateMap, newTrades, cumMap);
+    renderGateHistory(days, rawHit, dayFlags, rangePct, gateMap, newTrades, cumMap, displayDays);
     LIVE_STATE = {
       status: st.status, direction: st.direction, entry_price: st.entry_price,
       stop_loss_price: st.stop_loss_price, take_profit_price: st.take_profit_price, trigger_price: st.trigger_price,
