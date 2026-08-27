@@ -93,6 +93,8 @@
   .gate-progress-fill.notready { background: var(--pending); }
   .gate-progress-fill.ready { background: var(--up); }
   .gate-progress-val { font-size: 0.75rem; color: var(--text); min-width: 150px; flex-shrink: 0; text-align: right; }
+  .gate-progress-subrow { margin-top: -4px; }
+  .gate-progress-subval { font-size: 0.72rem; color: var(--muted); margin-left: auto; }
   .gate-period { background: var(--panel2); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 6px; padding: 8px 10px; }
   .gate-period summary {
     cursor: pointer; display: flex; gap: 10px; flex-wrap: wrap; align-items: center;
@@ -688,9 +690,11 @@ function renderGateHistory(days, rawHit, flag, rangePct, gateMap, newTrades, cum
 
     // Rule 1: today's rolling range vs the threshold it needs to shrink under.
     const currentRangePct = rangePct[n - 1];
+    const windowHigh = days[highIdx].high, windowLow = days[lowIdx].low;
     const rangeReadyPct = currentRangePct === null ? 0 : Math.min(100, (CFG.CAUSAL_DETECTOR_THRESHOLD_PCT / currentRangePct) * 100);
     const rangeBarClass = rangeReadyPct >= 100 ? "ready" : "notready";
     const rangeLabel = currentRangePct === null ? "warming up" : `${currentRangePct.toFixed(2)}% (need ≤${CFG.CAUSAL_DETECTOR_THRESHOLD_PCT}%)`;
+    const rangePriceLabel = currentRangePct === null ? "" : `${fmtUsd(windowLow)} – ${fmtUsd(windowHigh)}`;
 
     // Rule 2: consecutive tight days banked toward the persistence requirement.
     const persistPct = Math.min(100, (currentRun / CFG.CAUSAL_DETECTOR_PERSISTENCE_DAYS) * 100);
@@ -708,6 +712,10 @@ function renderGateHistory(days, rawHit, flag, rangePct, gateMap, newTrades, cum
           <span class="gate-progress-label">Rule 1 — range ≤${CFG.CAUSAL_DETECTOR_THRESHOLD_PCT}%</span>
           <div class="gate-progress-bar"><div class="gate-progress-fill ${rangeBarClass}" style="width:${rangeReadyPct}%"></div></div>
           <span class="gate-progress-val">${rangeLabel}</span>
+        </div>
+        <div class="gate-progress-row gate-progress-subrow">
+          <span class="gate-progress-label"></span>
+          <span class="gate-progress-subval">window: ${rangePriceLabel}</span>
         </div>
         <div class="gate-progress-row">
           <span class="gate-progress-label">Rule 2 — persistence</span>
