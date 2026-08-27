@@ -687,14 +687,17 @@ function renderGateHistory(days, rawHit, flag, rangePct, gateMap, newTrades, cum
     const anchorAgePct = Math.min(100, (daysSinceAnchor / lookback) * 100);
     const anchorBarClass = daysSinceAnchor >= lookback - 1 ? "ready" : "notready";
     const anchorWhich = anchorIdx === highIdx ? "high" : "low";
+    const windowHigh = days[highIdx].high, windowLow = days[lowIdx].low;
+    const windowPriceLabel = `${fmtUsd(windowLow)} – ${fmtUsd(windowHigh)}`;
+    // the ceiling price would need to stay under to qualify (≤12% above today's window low)
+    const qualifyingCeiling = windowLow * (1 + CFG.CAUSAL_DETECTOR_THRESHOLD_PCT / 100);
 
     // Rule 1: today's rolling range vs the threshold it needs to shrink under.
     const currentRangePct = rangePct[n - 1];
-    const windowHigh = days[highIdx].high, windowLow = days[lowIdx].low;
     const rangeReadyPct = currentRangePct === null ? 0 : Math.min(100, (CFG.CAUSAL_DETECTOR_THRESHOLD_PCT / currentRangePct) * 100);
     const rangeBarClass = rangeReadyPct >= 100 ? "ready" : "notready";
     const rangeLabel = currentRangePct === null ? "warming up" : `${currentRangePct.toFixed(2)}% (need ≤${CFG.CAUSAL_DETECTOR_THRESHOLD_PCT}%)`;
-    const rangePriceLabel = currentRangePct === null ? "" : `${fmtUsd(windowLow)} – ${fmtUsd(windowHigh)}`;
+    const rangePriceLabel = currentRangePct === null ? "" : windowPriceLabel;
 
     // Rule 2: consecutive tight days banked toward the persistence requirement.
     const persistPct = Math.min(100, (currentRun / CFG.CAUSAL_DETECTOR_PERSISTENCE_DAYS) * 100);
@@ -707,6 +710,10 @@ function renderGateHistory(days, rawHit, flag, rangePct, gateMap, newTrades, cum
           <span class="gate-progress-label">Lookback window (${lookback}d)</span>
           <div class="gate-progress-bar"><div class="gate-progress-fill ${anchorBarClass}" style="width:${anchorAgePct}%"></div></div>
           <span class="gate-progress-val">day ${daysSinceAnchor + 1} of ${lookback} since the ${anchorWhich} on ${days[anchorIdx].date}</span>
+        </div>
+        <div class="gate-progress-row gate-progress-subrow">
+          <span class="gate-progress-label"></span>
+          <span class="gate-progress-subval">window: ${windowPriceLabel} · needs to stay under ${fmtUsd(qualifyingCeiling)} (${CFG.CAUSAL_DETECTOR_THRESHOLD_PCT}% above today's low) once the current high ages out</span>
         </div>
         <div class="gate-progress-row">
           <span class="gate-progress-label">Rule 1 — range ≤${CFG.CAUSAL_DETECTOR_THRESHOLD_PCT}%</span>
